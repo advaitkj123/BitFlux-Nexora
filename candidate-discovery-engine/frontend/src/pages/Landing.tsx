@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import gsap from 'gsap';
+import { ScrollTrigger } from 'gsap/ScrollTrigger';
+import { useGSAP } from '@gsap/react';
 import '../landing.css';
 
+gsap.registerPlugin(ScrollTrigger);
 // ── Frame sequence config ──────────────────────────────────────────
 const TOTAL_FRAMES = 100;
 const IMG_PATH = (n: number) =>
@@ -167,6 +171,37 @@ export default function Landing() {
 
   const [showLogin, setShowLogin] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
+
+  useGSAP(() => {
+    if (!loaded) return;
+
+    // 1. Hero entrance animation
+    const tl = gsap.timeline({ defaults: { ease: "power3.out" } });
+    tl.from('.hero-badge', { y: 20, opacity: 0, duration: 0.6 })
+      .from('.hero-title', { y: 30, opacity: 0, duration: 0.8 }, "-=0.4")
+      .from('.hero-subtitle', { y: 20, opacity: 0, duration: 0.6 }, "-=0.6")
+      .from('.hero-actions', { y: 20, opacity: 0, duration: 0.6 }, "-=0.4")
+      .from('.hero-chip', { y: 20, opacity: 0, duration: 0.5, stagger: 0.1 }, "-=0.4")
+      .from('.scroll-hint', { opacity: 0, duration: 1 }, "-=0.2");
+
+    // 2. Features grid stagger on scroll
+    gsap.from('.feature-card', {
+      scrollTrigger: { trigger: '.features-grid', start: 'top 80%' },
+      y: 50, opacity: 0, duration: 0.6, stagger: 0.1, ease: "power2.out"
+    });
+
+    // 3. Steps timeline stagger on scroll
+    gsap.from('.step-card', {
+      scrollTrigger: { trigger: '.steps-timeline', start: 'top 80%' },
+      x: -30, opacity: 0, duration: 0.6, stagger: 0.15, ease: "power2.out"
+    });
+
+    // 4. Final CTA pop-in
+    gsap.from('.cta-content', {
+      scrollTrigger: { trigger: '.cta-section', start: 'top 85%' },
+      scale: 0.95, y: 30, opacity: 0, duration: 0.8, ease: "back.out(1.5)"
+    });
+  }, [loaded]);
 
   const handleLogin = () => {
     setLoggingIn(true);
