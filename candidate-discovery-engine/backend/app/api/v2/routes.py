@@ -196,6 +196,7 @@ async def rank_candidates(
     w_keyword: float = Form(0.5, ge=0.0, le=1.0),
     w_semantic: float = Form(0.5, ge=0.0, le=1.0),
     penalty_per_missing: float = Form(8.0, ge=0.0, le=20.0),
+    fusion_mode: str = Form("rrf", description="rrf or weighted"),
 ):
     """
     Run the full ranking pipeline.
@@ -242,6 +243,7 @@ async def rank_candidates(
             w_keyword=w_keyword,
             w_semantic=w_semantic,
             penalty_per_missing=penalty_per_missing,
+            fusion_mode=fusion_mode if fusion_mode in ("rrf", "weighted") else "rrf",
         )
     except Exception as e:
         logger.error("pipeline_failed", error=str(e)[:500])
@@ -398,6 +400,76 @@ async def recruiter_chat(body: ChatRequest):
         answer=response.answer,
         source=response.source,
         referenced_candidates=response.referenced_candidates,
+    )
+
+
+class CompareResponse(BaseModel):
+    candidate_a: CandidateScoreResponse
+    candidate_b: CandidateScoreResponse
+    skills_only_in_a: list[str]
+    skills_only_in_b: list[str]
+    skills_in_both: list[str]
+    score_diff: float
+    winner: str
+    why_a_beats_b: list[str]
+
+
+@router.get("/compare")
+async def compare_candidates(id_a: str, id_b: str):
+    """
+    Deterministic comparison of two candidates — no LLM.
+    Returns skill diff, score breakdown diff, and grounded reasons.
+    """
+    if not _latest_result:
+        raise HTTPException(status_code=404, detail="Run /api/v2/rank first.")
+
+    candidates_map = {c.candidate_id: c for c in _latest_result.ranked_candidates}
+    ca = candidates_map.get(id_a)
+    cb = candidates_map.get(id_b)
+
+    if not ca or not cb:
+        raise HTTPException(status_code=404, detail="One or both candidate IDs not found.")
+
+    set_a = set(ca.matched_required + ca.matched_preferred)
+    set_b = set(cb.matched_required + cb.matched_preferred)
+
+    only_a = sorted(set_a - set_b)
+    only_b = sorted(set_b - set_a)
+    both = sorted(set_a & set_b)
+
+    reasons = []
+    if ca.final_score > cb.final_score:
+        reasons.append(f"{ca.candidate_name} scores {ca.final_score:.1f} vs {cb.candidate_name}'s {cb.final_score:.1f} (+{ca.final_score - cb.final_score:.1f})")
+    if only_a:
+        reasons.append(f"Has {len(only_a)} unique required skills: {', '.join(only_a[:4])}")
+    if len(ca.missing_required) < len(cb.missing_required):
+        reasons.append(f"Missing fewer required skills ({len(ca.missing_required)} vs {len(cb.missing_required)})")
+    if ca.semantic_score > cb.semantic_score:
+        reasons.append(f"Stronger semantic match ({ca.semantic_score:.1f} vs {cb.semantic_score:.1f})")
+    if ca.keyword_score > cb.keyword_score:
+        reasons.append(f"Stronger keyword coverage ({ca.keyword_score:.1f} vs {cb.keyword_score:.1f})")
+
+    def to_response(c: any) -> CandidateScoreResponse:
+        evidence = [
+            EvidenceChunkResponse(text=chunk.text[:300], section_type=chunk.section_type, similarity=round(chunk.similarity, 4))
+            for chunk in c.top_evidence_chunks[:3]
+        ]
+        return CandidateScoreResponse(
+            candidate_id=c.candidate_id, candidate_name=c.candidate_name, rank=c.rank,
+            final_score=c.final_score, keyword_score=c.keyword_score, semantic_score=c.semantic_score,
+            skill_coverage_score=c.skill_coverage_score, bm25_score=c.bm25_score,
+            matched_required=c.matched_required, matched_preferred=c.matched_preferred,
+            missing_required=c.missing_required, missing_preferred=c.missing_preferred,
+            required_coverage=round(c.required_coverage, 3), preferred_coverage=round(c.preferred_coverage, 3),
+            top_evidence=evidence, penalty_applied=c.penalty_applied,
+        )
+
+    winner = ca.candidate_name if ca.final_score >= cb.final_score else cb.candidate_name
+    return CompareResponse(
+        candidate_a=to_response(ca), candidate_b=to_response(cb),
+        skills_only_in_a=only_a, skills_only_in_b=only_b, skills_in_both=both,
+        score_diff=round(ca.final_score - cb.final_score, 2),
+        winner=winner, why_a_beats_b=reasons,
     )
 
 

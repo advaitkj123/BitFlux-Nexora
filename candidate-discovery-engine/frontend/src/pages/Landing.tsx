@@ -194,7 +194,7 @@ export default function Landing() {
             <a href="#how-it-works">How It Works</a>
             <a href="#stats">Results</a>
           </div>
-          <button className="nav-cta" onClick={() => navigate('/search')}>
+          <button className="nav-cta" onClick={() => navigate('/rank')}>
             Try Demo →
           </button>
         </div>
@@ -220,7 +220,7 @@ export default function Landing() {
             with deterministic scoring, grounded explanations, and built-in bias detection.
           </p>
           <div className="hero-actions">
-            <button className="btn-hero-primary" onClick={() => navigate('/search')}>
+            <button className="btn-hero-primary" onClick={() => navigate('/rank')}>
               <span>Start Ranking Resumes</span>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             </button>

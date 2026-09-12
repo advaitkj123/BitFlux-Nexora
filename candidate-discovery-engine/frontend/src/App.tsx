@@ -4,6 +4,7 @@ import { SearchProvider } from './hooks/useSearchContext';
 import Landing from './pages/Landing';
 import SearchPage from './pages/Search';
 import CandidateDetailPage from './pages/CandidateDetail';
+import RankPage from './pages/RankPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -21,6 +22,7 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Landing />} />
+            <Route path="/rank" element={<RankPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/candidates/:id" element={<CandidateDetailPage />} />
           </Routes>

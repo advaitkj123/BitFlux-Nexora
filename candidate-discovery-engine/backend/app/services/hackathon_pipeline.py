@@ -212,6 +212,7 @@ async def run_pipeline(
     top_k_explain: int = 3,
     enable_bias_check: bool = True,
     enable_llm_polish: bool = True,
+    fusion_mode: str = "rrf",
 ) -> PipelineResult:
     """
     Execute the full hackathon scoring pipeline.
@@ -345,6 +346,7 @@ async def run_pipeline(
         w_keyword=w_keyword,
         w_semantic=w_semantic,
         penalty_per_missing=penalty_per_missing,
+        fusion_mode=fusion_mode,
     )
 
     latency_breakdown["fusion_ranking_ms"] = int((time.monotonic() - t0) * 1000)
