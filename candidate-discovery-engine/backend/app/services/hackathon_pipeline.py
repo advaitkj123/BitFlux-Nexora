@@ -46,6 +46,7 @@ from app.services.explanation_gen import (
 from app.services.bias_checker import BiasFlag, check_bias_rules, check_bias_with_llm
 from app.services.chunker import ResumeSection, chunk_resume
 from app.services.extractor import extract_text_from_bytes, extract_text_from_file
+import hashlib
 
 logger = structlog.get_logger()
 
@@ -150,8 +151,12 @@ def parse_resumes_from_bytes(
             # Identify candidate name
             name = _extract_candidate_name(raw_text, filename)
 
+            # Stable ID: hash of filename + text prefix, survives re-ordering
+            id_src = f"{filename}:{raw_text[:200]}"
+            stable_id = "c_" + hashlib.sha1(id_src.encode()).hexdigest()[:8]
+
             resumes.append(ResumeData(
-                candidate_id=f"candidate_{i:03d}",
+                candidate_id=stable_id,
                 candidate_name=name,
                 raw_text=raw_text,
                 sections=sections,
@@ -174,8 +179,10 @@ def parse_resumes_from_bytes(
                 error=str(e)[:200],
             )
             # Create a minimal entry so we don't silently drop candidates
+            id_src = f"{filename}:parse_error"
+            stable_id = "c_" + hashlib.sha1(id_src.encode()).hexdigest()[:8]
             resumes.append(ResumeData(
-                candidate_id=f"candidate_{i:03d}",
+                candidate_id=stable_id,
                 candidate_name=filename or f"Candidate {i+1}",
                 raw_text="",
                 sections=[],
@@ -342,7 +349,7 @@ async def run_pipeline(
         jd_text=jd_text,
         all_chunk_texts=all_chunk_texts,
         all_chunk_section_types=all_chunk_types,
-        top_k=4,
+        top_k=6,  # top 6 chunks — catches more relevant experience sections
     )
 
     latency_breakdown["semantic_scoring_ms"] = int((time.monotonic() - t0) * 1000)
@@ -371,11 +378,13 @@ async def run_pipeline(
     # ═════════════════════════════════════════════════════════════════
     t0 = time.monotonic()
 
-    total_jd_skills = len(parsed_jd.required_skills) + len(parsed_jd.preferred_skills)
+    # Generate explanations for ALL candidates (template-only = offline-safe)
+    # Use effective_required/preferred which account for the fallback promotion
+    total_jd_skills = len(effective_required) + len(effective_preferred)
     explanations = build_top_n_explanations(
         ranked_candidates=ranked_candidates,
         total_jd_skills=total_jd_skills,
-        n=top_k_explain,
+        n=len(ranked_candidates),  # ALL candidates get an explanation card
     )
 
     # Optional LLM polish
