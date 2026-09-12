@@ -1,6 +1,6 @@
-# 🧠 AI Candidate Discovery Engine
+#  AI Candidate Discovery Engine
 
-### Enterprise-Grade AI-Powered Resume Matching at Scale
+### Enterprise-Grade Resume Matching at Scale
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white)
@@ -13,11 +13,11 @@
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
-> **Search 110M+ candidate resumes in under 10 seconds with hybrid AI search + LLM reasoning.**
+> **Search 110M+ candidate resumes in under 10 seconds.**
 
 ---
 
-## 📋 Table of Contents
+##  Table of Contents
 
 - [Overview](#-overview)
 - [Features](#-features)
@@ -36,7 +36,7 @@
 
 ---
 
-## 🎯 Overview
+##  Overview
 
 The **AI Candidate Discovery Engine** is a production-grade system designed for enterprise recruiters to find the best-matching candidates from massive resume databases. Unlike traditional ATS keyword matching, this engine uses a **two-stage AI pipeline**:
 
@@ -59,20 +59,20 @@ A recruiter uploads a Job Description (text, PDF, or DOCX), and within **~9 seco
 
 ---
 
-## ✨ Features
+##  Features
 
-### 🔍 Core Search
+###  Core Search
 - **Hybrid Search** — BM25 keyword + HNSW vector + Microsoft semantic reranking via Reciprocal Rank Fusion (RRF)
 - **LLM Batch Scoring** — 4 parallel GPT-4o-mini calls scoring 20 candidates simultaneously
 - **Multi-Format Upload** — PDF, DOCX, and plain text JD ingestion with magic-byte security validation
 - **Redis Caching** — SHA-256 keyed embedding cache (24h TTL) for instant repeat searches
 
-### 📊 Analytics & Insights
+###  Analytics & Insights
 - **DEI Analytics Dashboard** — Location, experience, education, and score distribution charts
 - **JD Quality Scorer** — AI-evaluated clarity, specificity, and inclusivity scores with improvement suggestions
 - **Latency Breakdown** — Real-time Stage 1 / Stage 2 / Total timing displayed per search
 
-### 🏢 Enterprise Features
+###  Enterprise Features
 - **Rate Limiting** — Redis sliding-window, 30 searches/hour per client
 - **Request Tracing** — UUID `X-Request-ID` on every request for distributed tracing
 - **RFC 7807 Errors** — Standardized Problem+JSON error responses
@@ -81,14 +81,14 @@ A recruiter uploads a Job Description (text, PDF, or DOCX), and within **~9 seco
 - **Webhook Notifications** — HMAC-SHA256 signed payloads for candidates scoring >90
 - **Docker Compose** — One-command local deployment
 
-### 🎨 UX
+###  UX
 - **Glassmorphism Dark Theme** — Premium design with glass cards and gradient accents
 - **Micro-Animations** — Staggered card reveals, animated score gauges (Framer Motion)
 - **Navigation Persistence** — React Context preserves results across page navigation
 
 ---
 
-## 🏗 Architecture
+##  Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -197,7 +197,7 @@ Recruiter uploads JD
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 
@@ -291,7 +291,7 @@ docker-compose up --build
 
 ---
 
-## 🔑 Environment Variables
+##  Environment Variables
 
 | Variable | Required | Default | Description |
 |:---------|:--------:|:--------|:------------|
@@ -312,7 +312,7 @@ docker-compose up --build
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 candidate-discovery-engine/
@@ -384,7 +384,7 @@ candidate-discovery-engine/
 
 ---
 
-## 📡 API Reference
+##  API Reference
 
 | Method | Endpoint | Description |
 |:-------|:---------|:------------|
@@ -457,7 +457,7 @@ candidate-discovery-engine/
 
 ---
 
-## ⚙️ How the Pipeline Works
+##  How the Pipeline Works
 
 ### Stage 1a — JD Embedding
 
@@ -501,7 +501,7 @@ candidate-discovery-engine/
 
 ---
 
-## 🔬 Key Algorithms
+##  Key Algorithms
 
 | Algorithm | Where Used | Complexity |
 |:----------|:-----------|:-----------|
@@ -516,7 +516,7 @@ candidate-discovery-engine/
 
 ---
 
-## 📊 Performance Benchmarks
+##  Performance Benchmarks
 
 Tested with: *"Senior Python Developer, 5+ years, FastAPI, Docker, AWS, PostgreSQL"*
 
@@ -537,11 +537,11 @@ Tested with: *"Senior Python Developer, 5+ years, FastAPI, Docker, AWS, PostgreS
 | 10M candidates | ~1.5s | ~8s | ~9.5s |
 | 110M candidates | ~2s | ~8s | ~10s |
 
-> 💡 **Pipeline time is independent of database size** — HNSW is O(log N), and LLM always scores exactly 20 candidates regardless of total count.
+>  **Pipeline time is independent of database size** — HNSW is O(log N), and LLM always scores exactly 20 candidates regardless of total count.
 
 ---
 
-## 🐳 Deployment
+##  Deployment
 
 ### Docker Compose (Local)
 
@@ -570,7 +570,7 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ---
 
-## 🤝 Contributing
+##  Contributing
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/amazing-feature`
@@ -588,7 +588,7 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ---
 
-## 📄 License
+
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
 
