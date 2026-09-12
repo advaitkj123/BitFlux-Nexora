@@ -594,4 +594,4 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 ---
 
-**Built with ❤️ for Microsoft** — *AI Candidate Discovery Engine — Finding talent at the speed of thought.*
+**Built with ❤️ for Nexora Hackathon** — *Smart Candidate Discovery Engine — Finding talent at the speed of thought.*
