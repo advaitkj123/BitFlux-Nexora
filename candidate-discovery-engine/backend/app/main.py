@@ -13,9 +13,9 @@ from app.core.middleware import (
     register_exception_handlers,
 )
 from app.db.session import async_session_factory
-from app.api.v1.search import router as search_router
-from app.api.v1.ingest import router as ingest_router
-from app.api.v1.candidates import router as candidates_router
+# from app.api.v1.search import router as search_router
+# from app.api.v1.ingest import router as ingest_router
+# from app.api.v1.candidates import router as candidates_router
 from app.api.v2.routes import router as v2_router
 
 setup_logging()
@@ -78,9 +78,9 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
 
     # ── Mount API routes ─────────────────────────────────────────
-    app.include_router(search_router, prefix="/api/v1")
-    app.include_router(ingest_router, prefix="/api/v1")
-    app.include_router(candidates_router, prefix="/api/v1")
+    # app.include_router(search_router, prefix="/api/v1")
+    # app.include_router(ingest_router, prefix="/api/v1")
+    # app.include_router(candidates_router, prefix="/api/v1")
 
     # ── V2 Hackathon Routes (offline, deterministic) ─────────────
     app.include_router(v2_router, prefix="/api/v2")
