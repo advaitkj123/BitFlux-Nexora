@@ -65,3 +65,10 @@ instruction.md
 Resumes/
 Walkthorughs/
 *.sqlite3
+
+# Virtual environment
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
