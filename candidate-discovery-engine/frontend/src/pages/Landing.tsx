@@ -165,6 +165,18 @@ export default function Landing() {
     return () => window.removeEventListener('scroll', onScroll);
   }, [loaded]);
 
+  const [showLogin, setShowLogin] = useState(false);
+  const [loggingIn, setLoggingIn] = useState(false);
+
+  const handleLogin = () => {
+    setLoggingIn(true);
+    // Simulate OAuth delay
+    setTimeout(() => {
+      localStorage.setItem('user', JSON.stringify({ name: 'Demo User', email: 'demo@google.com' }));
+      navigate('/rank');
+    }, 1500);
+  };
+
   // ── Render ──────────────────────────────────────────────────────
   return (
     <div className="landing-root" ref={scrollContainerRef}>
@@ -182,6 +194,32 @@ export default function Landing() {
         </div>
       )}
 
+      {/* ── Mock Google Login Modal ───────────────────────────────── */}
+      {showLogin && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(8px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowLogin(false)}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: 32, width: 360, textAlign: 'center', boxShadow: '0 20px 40px rgba(0,0,0,0.4)', animation: 'trayIn 0.3s ease' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 24, marginBottom: 20 }}>
+              <span style={{ color: '#4285F4' }}>G</span>
+              <span style={{ color: '#EA4335' }}>o</span>
+              <span style={{ color: '#FBBC05' }}>o</span>
+              <span style={{ color: '#4285F4' }}>g</span>
+              <span style={{ color: '#34A853' }}>l</span>
+              <span style={{ color: '#EA4335' }}>e</span>
+            </div>
+            <h3 style={{ color: '#202124', fontSize: 20, marginBottom: 8 }}>Sign in</h3>
+            <p style={{ color: '#5f6368', fontSize: 14, marginBottom: 32 }}>to continue to InternLoom</p>
+            <button 
+              onClick={handleLogin}
+              disabled={loggingIn}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, background: '#fff', border: '1px solid #dadce0', borderRadius: 4, padding: '10px 16px', color: '#3c4043', fontSize: 14, fontWeight: 600, cursor: loggingIn ? 'wait' : 'pointer' }}
+            >
+              <img src="https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg" width="18" height="18" alt="G" />
+              {loggingIn ? 'Signing in...' : 'Sign in with Google'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── Navigation ──────────────────────────────────────────── */}
       <nav className={`landing-nav ${navScrolled ? 'scrolled' : ''}`}>
         <div className="nav-inner">
@@ -193,10 +231,10 @@ export default function Landing() {
             <a href="#features">Features</a>
             <a href="#how-it-works">How It Works</a>
             <a href="#stats">Results</a>
-            <a href="/rank" onClick={e => { e.preventDefault(); navigate('/rank'); }}>⚡ Rank Candidates</a>
+            <a href="/rank" onClick={e => { e.preventDefault(); setShowLogin(true); }}>⚡ Rank Candidates</a>
           </div>
-          <button className="nav-cta" onClick={() => navigate('/rank')}>
-            Try Demo →
+          <button className="nav-cta" onClick={() => setShowLogin(true)}>
+            Login with Google
           </button>
         </div>
       </nav>
@@ -221,7 +259,7 @@ export default function Landing() {
             with deterministic scoring, grounded explanations, and built-in bias detection.
           </p>
           <div className="hero-actions">
-            <button className="btn-hero-primary" onClick={() => navigate('/rank')}>
+            <button className="btn-hero-primary" onClick={() => setShowLogin(true)}>
               <span>Start Ranking Resumes</span>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             </button>
@@ -334,7 +372,7 @@ export default function Landing() {
         <div className="cta-content">
           <h2 className="cta-title">Ready to find your perfect candidate?</h2>
           <p className="cta-sub">Upload your JD and resumes. Get a ranked shortlist in under 30 seconds.</p>
-          <button className="btn-hero-primary cta-btn" onClick={() => navigate('/search')}>
+          <button className="btn-hero-primary cta-btn" onClick={() => setShowLogin(true)}>
             Launch InternLoom
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
           </button>
