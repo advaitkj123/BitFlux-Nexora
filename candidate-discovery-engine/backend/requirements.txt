@@ -40,6 +40,15 @@ PyMuPDF>=1.25.0             # PDF text extraction (the "fitz" library)
 python-docx>=1.1.2          # DOCX text extraction
 
 # ============================================================================
+# HACKATHON MATCHING ENGINE (v2 pipeline — all run offline on CPU)
+# ============================================================================
+sentence-transformers>=3.0.0 # Local semantic embeddings (all-MiniLM-L6-v2, 384-dim)
+rank-bm25>=0.2.2            # BM25Okapi keyword matching — literature-backed lexical scoring
+rapidfuzz>=3.10.0           # Fuzzy string matching for skill taxonomy (typo tolerance)
+numpy>=1.26.0               # Cosine similarity computation
+scikit-learn>=1.5.0         # Additional similarity utilities
+
+# ============================================================================
 # HTTP & RESILIENCE
 # ============================================================================
 httpx>=0.28.0               # Async HTTP client — used for webhook calls (NOT requests library)

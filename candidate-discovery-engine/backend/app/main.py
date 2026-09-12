@@ -16,6 +16,7 @@ from app.db.session import async_session_factory
 from app.api.v1.search import router as search_router
 from app.api.v1.ingest import router as ingest_router
 from app.api.v1.candidates import router as candidates_router
+from app.api.v2.routes import router as v2_router
 
 setup_logging()
 logger = structlog.get_logger()
@@ -29,33 +30,33 @@ async def lifespan(app: FastAPI):
     """
     logger.info("app_starting", environment=settings.ENVIRONMENT)
 
-    # Redis connection pool
-    app.state.redis = aioredis.from_url(
-        settings.REDIS_URL,
-        encoding="utf-8",
-        decode_responses=True,
-        max_connections=20,
-    )
-
-    # Verify Redis connection
+    # Redis connection pool (optional — v2 hackathon pipeline works without it)
     try:
+        app.state.redis = aioredis.from_url(
+            settings.REDIS_URL,
+            encoding="utf-8",
+            decode_responses=True,
+            max_connections=20,
+        )
         await app.state.redis.ping()
         logger.info("redis_connected", url=settings.REDIS_URL)
     except Exception as e:
-        logger.error("redis_connection_failed", error=str(e))
+        logger.warning("redis_connection_failed_non_critical", error=str(e))
+        app.state.redis = None
 
     app.state.db_factory = async_session_factory
     yield
-    await app.state.redis.close()
+    if app.state.redis:
+        await app.state.redis.close()
     logger.info("app_shutdown_complete")
 
 
 def create_app() -> FastAPI:
     """Factory function — creates and configures the FastAPI app."""
     app = FastAPI(
-        title="Candidate Discovery Engine",
-        description="AI-powered candidate search across 110M+ resumes",
-        version="1.0.0",
+        title="Smart Shortlisting Engine",
+        description="Two-signal resume ranking: keyword matching + semantic similarity with explainable scoring",
+        version="2.0.0",
         lifespan=lifespan,
     )
 
@@ -80,6 +81,9 @@ def create_app() -> FastAPI:
     app.include_router(search_router, prefix="/api/v1")
     app.include_router(ingest_router, prefix="/api/v1")
     app.include_router(candidates_router, prefix="/api/v1")
+
+    # ── V2 Hackathon Routes (offline, deterministic) ─────────────
+    app.include_router(v2_router, prefix="/api/v2")
 
     # ── Health check ─────────────────────────────────────────────
     @app.get("/health")
