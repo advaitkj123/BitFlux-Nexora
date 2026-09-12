@@ -1,27 +1,15 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Chart as ChartJS,
-  RadialLinearScale,
-  PointElement,
-  LineElement,
-  Filler,
-  Tooltip,
-  Legend,
-  CategoryScale,
-  LinearScale,
-  BarElement,
+  Chart as ChartJS, RadialLinearScale, PointElement, LineElement,
+  Filler, Tooltip, Legend, CategoryScale, LinearScale, BarElement,
 } from 'chart.js';
 import { Radar, Bar } from 'react-chartjs-2';
-import SkillGraph3D from '../components/SkillGraph3D';
 import './rank.css';
 
-ChartJS.register(
-  RadialLinearScale, PointElement, LineElement, Filler, Tooltip, Legend,
-  CategoryScale, LinearScale, BarElement,
-);
+ChartJS.register(RadialLinearScale, PointElement, LineElement, Filler, Tooltip, Legend, CategoryScale, LinearScale, BarElement);
 
-// ── Types ─────────────────────────────────────────────────────────────
+// ── Types ────────────────────────────────────────────────────────────
 interface EvidenceChunk { text: string; section_type: string; similarity: number; }
 interface Candidate {
   candidate_id: string; candidate_name: string; rank: number;
@@ -47,229 +35,350 @@ interface RankResult {
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
-// ── Helpers ──────────────────────────────────────────────────────────
+// ── Colour helpers ────────────────────────────────────────────────────
+function scoreGrad(s: number) {
+  if (s >= 80) return 'linear-gradient(135deg,#34d399,#10b981)';
+  if (s >= 60) return 'linear-gradient(135deg,#a78bfa,#7c3aed)';
+  if (s >= 40) return 'linear-gradient(135deg,#fb923c,#ea580c)';
+  return 'linear-gradient(135deg,#f87171,#dc2626)';
+}
 function scoreColor(s: number) {
-  if (s >= 75) return '#22d3ee';
-  if (s >= 50) return '#a78bfa';
-  if (s >= 30) return '#fb923c';
+  if (s >= 80) return '#34d399';
+  if (s >= 60) return '#a78bfa';
+  if (s >= 40) return '#fb923c';
   return '#f87171';
 }
-function rankBadge(r: number) {
-  if (r === 1) return { bg: 'linear-gradient(135deg,#f59e0b,#d97706)', text: '🥇 #1' };
-  if (r === 2) return { bg: 'linear-gradient(135deg,#94a3b8,#64748b)', text: '🥈 #2' };
-  if (r === 3) return { bg: 'linear-gradient(135deg,#c2855e,#a16240)', text: '🥉 #3' };
-  return { bg: 'rgba(255,255,255,0.06)', text: `#${r}` };
+const MEDAL: Record<number, string> = { 1: '🥇', 2: '🥈', 3: '🥉' };
+
+// ── Animated floating-particle background ────────────────────────────
+function ParticleCanvas() {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = ref.current!;
+    const ctx = canvas.getContext('2d')!;
+    let frame = 0;
+    const particles: { x: number; y: number; r: number; dx: number; dy: number; hue: number; alpha: number }[] = [];
+    const resize = () => { canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight; };
+    resize();
+    window.addEventListener('resize', resize);
+    for (let i = 0; i < 60; i++) {
+      particles.push({
+        x: Math.random() * canvas.width, y: Math.random() * canvas.height,
+        r: Math.random() * 2 + 0.5,
+        dx: (Math.random() - 0.5) * 0.3, dy: (Math.random() - 0.5) * 0.3,
+        hue: Math.random() * 60 + 240, alpha: Math.random() * 0.4 + 0.1,
+      });
+    }
+    let raf: number;
+    const draw = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      particles.forEach(p => {
+        p.x += p.dx; p.y += p.dy;
+        if (p.x < 0) p.x = canvas.width;
+        if (p.x > canvas.width) p.x = 0;
+        if (p.y < 0) p.y = canvas.height;
+        if (p.y > canvas.height) p.y = 0;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${p.hue},70%,65%,${p.alpha})`;
+        ctx.fill();
+      });
+      // subtle connecting lines
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x;
+          const dy = particles[i].y - particles[j].y;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d < 100) {
+            ctx.beginPath();
+            ctx.moveTo(particles[i].x, particles[i].y);
+            ctx.lineTo(particles[j].x, particles[j].y);
+            ctx.strokeStyle = `rgba(167,139,250,${0.07 * (1 - d / 100)})`;
+            ctx.lineWidth = 0.5;
+            ctx.stroke();
+          }
+        }
+      }
+      frame++;
+      raf = requestAnimationFrame(draw);
+    };
+    draw();
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
+  }, []);
+  return <canvas ref={ref} style={{ position: 'fixed', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 0 }} />;
 }
 
-// ── Sub-components ───────────────────────────────────────────────────
-
-function RadarCard({ candidate }: { candidate: Candidate }) {
-  const data = {
-    labels: ['Keyword', 'Semantic', 'Skill Cover', 'BM25', 'Req. Coverage'],
-    datasets: [{
-      label: candidate.candidate_name,
-      data: [
-        candidate.keyword_score,
-        candidate.semantic_score,
-        candidate.skill_coverage_score,
-        candidate.bm25_score,
-        candidate.required_coverage * 100,
-      ],
-      backgroundColor: 'rgba(124,58,237,0.18)',
-      borderColor: '#7c3aed',
-      borderWidth: 2,
-      pointBackgroundColor: '#a78bfa',
-      pointRadius: 4,
-    }],
-  };
-  const opts = {
-    responsive: true,
-    plugins: { legend: { display: false } },
-    scales: {
-      r: {
-        min: 0, max: 100,
-        grid: { color: 'rgba(255,255,255,0.07)' },
-        angleLines: { color: 'rgba(255,255,255,0.08)' },
-        pointLabels: { color: 'rgba(255,255,255,0.5)', font: { size: 10 } },
-        ticks: { display: false },
-      },
-    },
-  };
-  return <Radar data={data} options={opts as any} />;
-}
-
-function ScoreBar({ label, value, color, max = 100 }: { label: string; value: number; color: string; max?: number }) {
-  const pct = Math.min(100, (value / max) * 100);
+// ── Animated ring score ───────────────────────────────────────────────
+function RingScore({ score, size = 90, label }: { score: number; size?: number; label?: string }) {
+  const [animated, setAnimated] = useState(0);
+  useEffect(() => {
+    let start = 0; const target = score;
+    const step = () => { start = Math.min(target, start + 2.5); setAnimated(start); if (start < target) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  }, [score]);
+  const r = size / 2 - 10;
+  const circ = 2 * Math.PI * r;
+  const col = scoreColor(score);
   return (
-    <div className="score-bar-row">
-      <span className="score-bar-label">{label}</span>
-      <div className="score-bar-track">
-        <div className="score-bar-fill" style={{ width: `${pct}%`, background: color }} />
+    <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+      <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={8} />
+        <circle cx={size/2} cy={size/2} r={r} fill="none"
+          stroke={col} strokeWidth={8}
+          strokeDasharray={circ} strokeDashoffset={circ * (1 - animated / 100)}
+          strokeLinecap="round"
+          style={{ transition: 'stroke-dashoffset 0.05s', filter: `drop-shadow(0 0 8px ${col})` }}
+        />
+      </svg>
+      <div style={{ position: 'absolute', textAlign: 'center' }}>
+        <div style={{ fontSize: size * 0.24, fontWeight: 900, color: col, lineHeight: 1 }}>{Math.round(animated)}</div>
+        {label && <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', marginTop: 2 }}>{label}</div>}
       </div>
-      <span className="score-bar-value" style={{ color }}>{value.toFixed(1)}</span>
     </div>
   );
 }
 
-function CircleScore({ score, size = 80 }: { score: number; size?: number }) {
-  const r = (size / 2) - 8;
-  const circ = 2 * Math.PI * r;
-  const pct = score / 100;
-  const color = scoreColor(score);
+// ── Animated bar ──────────────────────────────────────────────────────
+function AnimBar({ label, value, color, max = 100 }: { label: string; value: number; color: string; max?: number }) {
+  const [w, setW] = useState(0);
+  useEffect(() => { setTimeout(() => setW(Math.min(100, (value / max) * 100)), 50); }, [value, max]);
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="circle-score">
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={6} />
-      <circle
-        cx={size / 2} cy={size / 2} r={r} fill="none"
-        stroke={color} strokeWidth={6}
-        strokeDasharray={circ}
-        strokeDashoffset={circ * (1 - pct)}
-        strokeLinecap="round"
-        transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        style={{ transition: 'stroke-dashoffset 1s ease', filter: `drop-shadow(0 0 6px ${color})` }}
-      />
-      <text x="50%" y="50%" dominantBaseline="middle" textAnchor="middle"
-        fill={color} fontSize={size * 0.22} fontWeight={800} fontFamily="Inter">
-        {score.toFixed(0)}
-      </text>
-    </svg>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+      <span style={{ width: 80, fontSize: 10, color: 'rgba(255,255,255,0.45)', textAlign: 'right', flexShrink: 0 }}>{label}</span>
+      <div style={{ flex: 1, height: 5, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${w}%`, background: color, borderRadius: 3, transition: 'width 0.8s cubic-bezier(0.34,1.56,0.64,1)', boxShadow: `0 0 8px ${color}55` }} />
+      </div>
+      <span style={{ width: 36, fontSize: 11, fontWeight: 700, color, textAlign: 'right', flexShrink: 0 }}>{value.toFixed(1)}</span>
+    </div>
   );
 }
 
-function LatencyBadge({ breakdown }: { breakdown: Record<string, number> }) {
-  const steps = [
-    { key: 'jd_parsing_ms', label: 'JD Parse' },
-    { key: 'resume_parsing_ms', label: 'Resume Parse' },
-    { key: 'keyword_scoring_ms', label: 'BM25+Keywords' },
-    { key: 'semantic_scoring_ms', label: 'Embeddings' },
-    { key: 'fusion_ranking_ms', label: 'RRF Fusion' },
-    { key: 'explanation_ms', label: 'Explanations' },
-    { key: 'bias_check_ms', label: 'Bias Check' },
-  ];
+// ── 3D-style GNN Skill Graph (canvas) ────────────────────────────────
+function SkillGraph({ matched, preferred, missing, name }: { matched: string[]; preferred: string[]; missing: string[]; name: string }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const animRef = useRef<number>(0);
+  const nodesRef = useRef<any[]>([]);
+  const mouseRef = useRef({ x: -999, y: -999 });
+
+  useEffect(() => {
+    const c = canvas.current!;
+    const ctx = c.getContext('2d')!;
+    let W = c.offsetWidth, H = c.offsetHeight;
+    c.width = W; c.height = H;
+
+    const cx = W / 2, cy = H / 2;
+    const skills = [
+      ...matched.map(s => ({ label: s, type: 'matched' })),
+      ...preferred.map(s => ({ label: s, type: 'preferred' })),
+      ...missing.map(s => ({ label: s, type: 'missing' })),
+    ];
+
+    const total = skills.length;
+    const R = Math.min(cx, cy) * 0.72;
+    // Centre node
+    const nodes: any[] = [{ id: '__center__', label: name.split(' ').slice(-1)[0]?.slice(0,10) || name, type: 'center', x: cx, y: cy, vx: 0, vy: 0, r: 22 }];
+    skills.forEach((s, i) => {
+      const angle = (i / Math.max(total, 1)) * Math.PI * 2 - Math.PI / 2;
+      nodes.push({
+        id: s.label, label: s.label, type: s.type,
+        x: cx + R * Math.cos(angle) + (Math.random() - 0.5) * 20,
+        y: cy + R * Math.sin(angle) + (Math.random() - 0.5) * 20,
+        vx: 0, vy: 0, r: 18, angle,
+      });
+    });
+    nodesRef.current = nodes;
+
+    const colorOf = (type: string) => type === 'center' ? '#7c3aed' : type === 'matched' ? '#34d399' : type === 'preferred' ? '#38bdf8' : '#f87171';
+    let hovered: any = null;
+    let t = 0;
+
+    const draw = () => {
+      ctx.clearRect(0, 0, W, H);
+      // ── orbit lines ──
+      nodes.slice(1).forEach(n => {
+        const isMissing = n.type === 'missing';
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(n.x, n.y);
+        if (isMissing) { ctx.setLineDash([4, 5]); }
+        ctx.strokeStyle = colorOf(n.type) + '33';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      });
+
+      // ── nodes ──
+      const mx = mouseRef.current.x, my = mouseRef.current.y;
+      hovered = null;
+      nodes.forEach(n => {
+        const dist = Math.sqrt((n.x - mx) ** 2 + (n.y - my) ** 2);
+        const isHov = dist < n.r + 6;
+        if (isHov) hovered = n;
+
+        // glow
+        const grd = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, n.r * (isHov ? 1.5 : 1.2));
+        const col = colorOf(n.type);
+        grd.addColorStop(0, col + 'cc');
+        grd.addColorStop(1, col + '00');
+        ctx.beginPath(); ctx.arc(n.x, n.y, n.r * 1.5, 0, Math.PI * 2);
+        ctx.fillStyle = grd; ctx.fill();
+
+        // node body
+        ctx.beginPath(); ctx.arc(n.x, n.y, n.r + (isHov ? 3 : 0), 0, Math.PI * 2);
+        ctx.fillStyle = col + '22'; ctx.fill();
+        ctx.strokeStyle = col; ctx.lineWidth = isHov ? 2.5 : 1.5;
+        ctx.stroke();
+
+        // label
+        ctx.fillStyle = isHov ? '#fff' : col;
+        ctx.font = `${n.type === 'center' ? 'bold ' : ''}${isHov ? 10 : 9}px Inter,sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        const words = n.label.split(' ');
+        if (words.length === 1) { ctx.fillText(n.label.slice(0, 9), n.x, n.y); }
+        else {
+          ctx.fillText(words[0].slice(0, 8), n.x, n.y - 4);
+          ctx.fillText(words.slice(1).join(' ').slice(0, 8), n.x, n.y + 4);
+        }
+      });
+
+      // tooltip on hover
+      if (hovered) {
+        const tx = hovered.x + 18, ty = hovered.y - 12;
+        const label = hovered.label;
+        ctx.font = '11px Inter,sans-serif';
+        const tw = ctx.measureText(label).width + 16;
+        ctx.fillStyle = 'rgba(15,12,40,0.9)';
+        ctx.beginPath();
+        ctx.roundRect?.(tx - 4, ty - 14, tw, 22, 6) || ctx.rect(tx - 4, ty - 14, tw, 22);
+        ctx.fill();
+        ctx.strokeStyle = colorOf(hovered.type) + '88'; ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.fillText(label, tx + tw / 2 - 12, ty);
+      }
+
+      // subtle orbit pulse
+      t++;
+      nodes.slice(1).forEach((n, i) => {
+        const pulse = Math.sin(t * 0.02 + i * 0.8) * 2;
+        const baseAngle = n.angle || (i / total) * Math.PI * 2;
+        n.x = cx + (R + pulse) * Math.cos(baseAngle + t * 0.003);
+        n.y = cy + (R + pulse) * Math.sin(baseAngle + t * 0.003);
+      });
+
+      animRef.current = requestAnimationFrame(draw);
+    };
+    draw();
+
+    const onMouseMove = (e: MouseEvent) => {
+      const rect = c.getBoundingClientRect();
+      mouseRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    };
+    c.addEventListener('mousemove', onMouseMove);
+    return () => { cancelAnimationFrame(animRef.current); c.removeEventListener('mousemove', onMouseMove); };
+  }, [matched, preferred, missing, name]);
+
   return (
-    <div className="latency-panel glass-dark">
-      <div className="latency-title">⚡ Pipeline Latency Breakdown</div>
-      <div className="latency-steps">
-        {steps.filter(s => breakdown[s.key] !== undefined).map(s => (
-          <div key={s.key} className="latency-step">
-            <span className="latency-step-label">{s.label}</span>
-            <div className="latency-bar-track">
-              <div className="latency-bar-fill" style={{
-                width: `${Math.min(100, (breakdown[s.key] / Math.max(...Object.values(breakdown))) * 100)}%`
-              }} />
-            </div>
-            <span className="latency-step-ms">{breakdown[s.key]}ms</span>
+    <div style={{ position: 'relative' }}>
+      {/* Legend */}
+      <div style={{ display: 'flex', gap: 14, marginBottom: 8, flexWrap: 'wrap' }}>
+        {[['#34d399', `✓ Matched (${matched.length})`], ['#38bdf8', `~ Preferred (${preferred.length})`], ['#f87171', `✗ Missing (${missing.length})`]].map(([col, lbl]) => (
+          <div key={lbl as string} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: 'rgba(255,255,255,0.5)' }}>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: col as string, boxShadow: `0 0 6px ${col}` }} />
+            <span>{lbl}</span>
           </div>
         ))}
       </div>
-      <div className="latency-total">Total: {breakdown.total_ms}ms</div>
+      <canvas ref={canvas} style={{ width: '100%', height: 240, borderRadius: 12, cursor: 'crosshair', display: 'block' }} />
     </div>
   );
 }
 
+// ── Score Histogram ───────────────────────────────────────────────────
 function ScoreHistogram({ candidates }: { candidates: Candidate[] }) {
-  const buckets = [0, 0, 0, 0, 0]; // 0-20, 20-40, 40-60, 60-80, 80-100
-  candidates.forEach(c => {
-    const b = Math.min(4, Math.floor(c.final_score / 20));
-    buckets[b]++;
-  });
+  const buckets = [0, 0, 0, 0, 0];
+  candidates.forEach(c => { buckets[Math.min(4, Math.floor(c.final_score / 20))]++; });
   const data = {
-    labels: ['0-20', '20-40', '40-60', '60-80', '80-100'],
-    datasets: [{
-      label: 'Candidates',
-      data: buckets,
-      backgroundColor: ['#f87171aa','#fb923caa','#fbbf24aa','#a78bfaaa','#22d3eeaa'],
-      borderRadius: 6,
-    }],
-  };
-  const opts = {
-    responsive: true,
-    plugins: { legend: { display: false } },
-    scales: {
-      x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: 'rgba(255,255,255,0.4)' } },
-      y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: 'rgba(255,255,255,0.4)', stepSize: 1 } },
-    },
+    labels: ['0–20', '20–40', '40–60', '60–80', '80–100'],
+    datasets: [{ label: 'Count', data: buckets, backgroundColor: ['#f87171aa','#fb923caa','#fbbf24aa','#a78bfaaa','#34d399aa'], borderRadius: 6, borderSkipped: false }],
   };
   return (
-    <div className="histogram-card glass-dark">
-      <div className="histogram-title">Score Distribution</div>
-      <Bar data={data} options={opts as any} />
+    <div className="glass-panel" style={{ padding: 16 }}>
+      <div className="panel-label">Score Distribution</div>
+      <Bar data={data} options={{ responsive: true, plugins: { legend: { display: false } }, scales: { x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: 'rgba(255,255,255,0.35)', font: { size: 10 } } }, y: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: 'rgba(255,255,255,0.35)', stepSize: 1, font: { size: 10 } } } } } as any} />
     </div>
   );
 }
 
+// ── Radar mini ────────────────────────────────────────────────────────
+function RadarMini({ c }: { c: Candidate }) {
+  const data = {
+    labels: ['Keyword', 'Semantic', 'Skill', 'BM25', 'Coverage'],
+    datasets: [{ data: [c.keyword_score, c.semantic_score, c.skill_coverage_score, c.bm25_score, c.required_coverage * 100], backgroundColor: 'rgba(124,58,237,0.15)', borderColor: '#7c3aed', borderWidth: 2, pointBackgroundColor: '#a78bfa', pointRadius: 3 }],
+  };
+  return <Radar data={data} options={{ responsive: true, plugins: { legend: { display: false } }, scales: { r: { min: 0, max: 100, grid: { color: 'rgba(255,255,255,0.06)' }, angleLines: { color: 'rgba(255,255,255,0.06)' }, pointLabels: { color: 'rgba(255,255,255,0.4)', font: { size: 9 } }, ticks: { display: false } } } } as any} />;
+}
+
+// ── Compare modal ─────────────────────────────────────────────────────
 function CompareModal({ candidates, onClose }: { candidates: Candidate[]; onClose: () => void }) {
-  const [idA, setIdA] = useState(candidates[0]?.candidate_id ?? '');
-  const [idB, setIdB] = useState(candidates[1]?.candidate_id ?? '');
+  const [a, setA] = useState(candidates[0]?.candidate_id ?? '');
+  const [b, setB] = useState(candidates[1]?.candidate_id ?? '');
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   async function compare() {
     setLoading(true);
     try {
-      const r = await fetch(`${API}/api/v2/compare?id_a=${idA}&id_b=${idB}`);
+      const r = await fetch(`${API}/api/v2/compare?id_a=${a}&id_b=${b}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setResult(await r.json());
-    } catch { /* ignore */ }
+    } catch (e: any) { alert(e.message); }
     setLoading(false);
   }
 
-  const ca = candidates.find(c => c.candidate_id === idA);
-  const cb = candidates.find(c => c.candidate_id === idB);
+  const sel = (v: string, set: (s: string) => void) => (
+    <select value={v} onChange={e => set(e.target.value)} style={{ background: 'rgba(15,12,40,0.9)', border: '1px solid rgba(124,58,237,0.3)', color: '#e0e7ff', padding: '8px 12px', borderRadius: 8, fontSize: 13, width: '100%', cursor: 'pointer' }}>
+      {candidates.map(c => <option key={c.candidate_id} value={c.candidate_id}>{c.rank}. {c.candidate_name}</option>)}
+    </select>
+  );
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="compare-modal glass-dark" onClick={e => e.stopPropagation()}>
-        <div className="modal-header">
-          <h2 className="modal-title">⚖️ Compare Candidates</h2>
-          <button className="modal-close" onClick={onClose}>✕</button>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(8px)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }} onClick={onClose}>
+      <div style={{ background: 'rgba(15,12,40,0.97)', border: '1px solid rgba(124,58,237,0.3)', borderRadius: 20, padding: 32, width: '100%', maxWidth: 700, maxHeight: '90vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+          <h3 style={{ margin: 0, fontSize: 20, fontWeight: 800, background: 'linear-gradient(90deg,#a78bfa,#38bdf8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>⚖️ Compare Candidates</h3>
+          <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.06)', border: 'none', color: '#fff', width: 32, height: 32, borderRadius: 8, cursor: 'pointer', fontSize: 16 }}>✕</button>
         </div>
-
-        <div className="compare-selects">
-          <select value={idA} onChange={e => setIdA(e.target.value)} className="compare-select">
-            {candidates.map(c => <option key={c.candidate_id} value={c.candidate_id}>{c.candidate_name} (#{c.rank})</option>)}
-          </select>
-          <span className="compare-vs">VS</span>
-          <select value={idB} onChange={e => setIdB(e.target.value)} className="compare-select">
-            {candidates.map(c => <option key={c.candidate_id} value={c.candidate_id}>{c.candidate_name} (#{c.rank})</option>)}
-          </select>
-          <button className="btn-compare" onClick={compare} disabled={loading || idA === idB}>
-            {loading ? '...' : 'Compare'}
-          </button>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+          <div><div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 6 }}>CANDIDATE A</div>{sel(a, setA)}</div>
+          <div><div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 6 }}>CANDIDATE B</div>{sel(b, setB)}</div>
         </div>
-
-        {result && !result.detail && (
-          <div className="compare-result">
-            <div className="compare-winner">
-              🏆 Winner: <strong>{result.winner}</strong>
-              {result.score_diff !== 0 && <span className="compare-diff"> ({result.score_diff > 0 ? '+' : ''}{result.score_diff.toFixed(1)} pts)</span>}
+        <button onClick={compare} disabled={loading || a === b} style={{ width: '100%', padding: '12px', background: a === b ? 'rgba(255,255,255,0.05)' : 'linear-gradient(135deg,#7c3aed,#2563eb)', border: 'none', borderRadius: 10, color: '#fff', fontWeight: 700, fontSize: 14, cursor: a === b ? 'not-allowed' : 'pointer', marginBottom: 20 }}>
+          {loading ? '⏳ Comparing...' : '⚡ Run Comparison'}
+        </button>
+        {result && (
+          <div>
+            <div style={{ textAlign: 'center', marginBottom: 20 }}>
+              <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)', marginBottom: 4 }}>WINNER</div>
+              <div style={{ fontSize: 22, fontWeight: 900, color: '#34d399' }}>🏆 {result.winner}</div>
+              <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.4)', marginTop: 4 }}>Score diff: {result.score_diff > 0 ? '+' : ''}{result.score_diff.toFixed(1)}</div>
             </div>
-
-            <div className="compare-reasons">
-              {(result.why_a_beats_b || []).map((r: string, i: number) => (
-                <div key={i} className="compare-reason">✓ {r}</div>
+            {result.why_a_beats_b?.length > 0 && (
+              <div style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: '#34d399', marginBottom: 8 }}>WHY {result.candidate_a?.candidate_name?.split(' ')[0]} LEADS</div>
+                {result.why_a_beats_b.map((r: string, i: number) => <div key={i} style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>• {r}</div>)}
+              </div>
+            )}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+              {[['✓ Only A', result.skills_only_in_a, '#34d399'], ['Both', result.skills_in_both, '#a78bfa'], ['✓ Only B', result.skills_only_in_b, '#38bdf8']].map(([label, skills, col]) => (
+                <div key={label as string} style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 10, padding: 12 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: col as string, marginBottom: 8 }}>{label as string}</div>
+                  {(skills as string[]).slice(0, 6).map((s: string) => <div key={s} style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', padding: '2px 0' }}>{s}</div>)}
+                  {(skills as string[]).length === 0 && <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>none</div>}
+                </div>
               ))}
-            </div>
-
-            <div className="compare-skills-grid">
-              <div className="compare-col">
-                <div className="compare-col-header" style={{ color: '#22d3ee' }}>
-                  {result.candidate_a?.candidate_name} only
-                </div>
-                {result.skills_only_in_a?.map((s: string) => <span key={s} className="compare-skill green">{s}</span>)}
-                {result.skills_only_in_a?.length === 0 && <span className="compare-none">—</span>}
-              </div>
-              <div className="compare-col">
-                <div className="compare-col-header" style={{ color: '#a78bfa' }}>Both have</div>
-                {result.skills_in_both?.map((s: string) => <span key={s} className="compare-skill both">{s}</span>)}
-                {result.skills_in_both?.length === 0 && <span className="compare-none">—</span>}
-              </div>
-              <div className="compare-col">
-                <div className="compare-col-header" style={{ color: '#f87171' }}>
-                  {result.candidate_b?.candidate_name} only
-                </div>
-                {result.skills_only_in_b?.map((s: string) => <span key={s} className="compare-skill red">{s}</span>)}
-                {result.skills_only_in_b?.length === 0 && <span className="compare-none">—</span>}
-              </div>
             </div>
           </div>
         )}
@@ -278,242 +387,292 @@ function CompareModal({ candidates, onClose }: { candidates: Candidate[]; onClos
   );
 }
 
-function CandidateCard({
-  candidate, explanation, onSelect, selected,
-}: {
-  candidate: Candidate;
-  explanation?: Explanation;
-  onSelect: () => void;
-  selected: boolean;
-}) {
-  const badge = rankBadge(candidate.rank);
-  const [expanded, setExpanded] = useState(false);
-  const [showGraph, setShowGraph] = useState(false);
+// ── Candidate Card ────────────────────────────────────────────────────
+function CandidateCard({ c, exp, active, onClick, jdSkillCount }: { c: Candidate; exp?: Explanation; active: boolean; onClick: () => void; jdSkillCount: number }) {
+  const [tab, setTab] = useState<'scores' | 'graph' | 'evidence'>('scores');
+  const col = scoreColor(c.final_score);
+  const medal = MEDAL[c.rank];
 
-  // Clean evidence: filter out contact-info evidence (lines with @, phone patterns)
-  const cleanEvidence = (explanation?.supporting_evidence ?? []).filter(e => {
-    const lower = e.toLowerCase();
-    return !(
-      lower.includes('@') ||
-      /\+?[0-9]{10,}/.test(e) ||
-      lower.includes('linkedin') ||
-      lower.includes('github.com') ||
-      e.length < 40
-    );
+  // Clean evidence
+  const cleanEvidence = (c.top_evidence ?? []).filter(ch => {
+    const t = ch.text.toLowerCase();
+    return ch.section_type !== 'header' && !(t.includes('@') && t.includes('.com')) && !/\+?[0-9]{10}/.test(ch.text) && ch.text.length > 60;
   });
 
-  // Clean top_evidence chunks from the candidate object — filter header-type content
-  const cleanChunks = candidate.top_evidence.filter(chunk => {
-    const t = chunk.text.toLowerCase();
-    return !(
-      t.includes('@') && t.includes('.com') ||
-      chunk.section_type === 'header' ||
-      /\+?[0-9]{10}/.test(chunk.text) ||
-      chunk.text.length < 60
-    );
-  });
+  const totalRequired = c.matched_required.length + c.missing_required.length;
+  const coverPct = totalRequired > 0 ? Math.round((c.matched_required.length / totalRequired) * 100) : 0;
 
   return (
     <div
-      className={`candidate-card glass-dark ${selected ? 'selected' : ''} ${candidate.rank <= 3 ? 'top3' : ''}`}
-      onClick={onSelect}
+      className={`ccard ${active ? 'ccard--active' : ''}`}
+      onClick={onClick}
+      style={{ '--accent': col } as any}
     >
-      <div className="card-top">
-        <div className="card-left">
-          <div className="rank-badge" style={{ background: badge.bg }}>{badge.text}</div>
-          <div className="candidate-name">{candidate.candidate_name}</div>
-          <div className="coverage-pills">
-            <span className="coverage-pill green">
-              ✓ {candidate.matched_required.length}/{candidate.matched_required.length + candidate.missing_required.length} required
+      {/* Top row */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
+        <div style={{ position: 'relative' }}>
+          <RingScore score={c.final_score} size={76} />
+          {medal && <div style={{ position: 'absolute', top: -6, right: -6, fontSize: 18 }}>{medal}</div>}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+            <span style={{ fontSize: 10, fontWeight: 800, color: col, background: `${col}18`, border: `1px solid ${col}33`, padding: '1px 8px', borderRadius: 4 }}>#{c.rank}</span>
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: '#f0f4ff', marginBottom: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.candidate_name}</div>
+          {/* Coverage bar */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ flex: 1, height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${coverPct}%`, background: coverPct >= 80 ? '#34d399' : coverPct >= 50 ? '#a78bfa' : '#f87171', transition: 'width 1s ease', borderRadius: 2 }} />
+            </div>
+            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)', whiteSpace: 'nowrap' }}>
+              {c.matched_required.length}/{totalRequired} required ({coverPct}%)
             </span>
-            {candidate.missing_required.length > 0 && (
-              <span className="coverage-pill red">
-                ✗ {candidate.missing_required.length} missing
-              </span>
-            )}
           </div>
         </div>
-        <div className="card-right">
-          <CircleScore score={candidate.final_score} size={68} />
-        </div>
       </div>
 
-      <div className="score-bars">
-        <ScoreBar label="Keyword" value={candidate.keyword_score} color="#a78bfa" />
-        <ScoreBar label="Semantic" value={candidate.semantic_score} color="#22d3ee" />
-        <ScoreBar label="Skill Cover" value={candidate.skill_coverage_score} color="#34d399" />
-        {candidate.penalty_applied > 0 && (
-          <ScoreBar label="Penalty" value={candidate.penalty_applied} color="#f87171" />
-        )}
+      {/* Skill chips */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 12 }}>
+        {c.matched_required.slice(0, 4).map(s => <span key={s} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: 'rgba(52,211,153,0.1)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)' }}>✓ {s}</span>)}
+        {c.missing_required.slice(0, 2).map(s => <span key={s} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: 'rgba(248,113,113,0.08)', color: '#f87171', border: '1px solid rgba(248,113,113,0.2)' }}>✗ {s}</span>)}
+        {c.matched_preferred.slice(0, 2).map(s => <span key={s} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: 'rgba(56,189,248,0.08)', color: '#38bdf8', border: '1px solid rgba(56,189,248,0.18)' }}>~ {s}</span>)}
       </div>
 
-      <div className="skill-chips">
-        {candidate.matched_required.slice(0, 5).map(s => (
-          <span key={s} className="skill-chip green">✓ {s}</span>
-        ))}
-        {candidate.missing_required.slice(0, 3).map(s => (
-          <span key={s} className="skill-chip red">✗ {s}</span>
-        ))}
-        {candidate.matched_preferred.slice(0, 3).map(s => (
-          <span key={s} className="skill-chip blue">~ {s}</span>
-        ))}
-        {candidate.matched_required.length > 5 && (
-          <span className="skill-chip grey">+{candidate.matched_required.length - 5} more</span>
-        )}
-      </div>
-
-      {/* ── 3D Skill Graph toggle */}
-      <div className="card-actions" onClick={e => e.stopPropagation()}>
-        <button
-          className="expand-btn"
-          onClick={() => setShowGraph(!showGraph)}
-        >
-          {showGraph ? '▲ Hide skill graph' : '▼ Show 3D skill graph'}
-        </button>
-        {(explanation || cleanChunks.length > 0) && (
-          <button
-            className="expand-btn"
-            style={{ marginLeft: 12 }}
-            onClick={() => setExpanded(!expanded)}
-          >
-            {expanded ? '▲ Hide evidence' : '▼ Show evidence'}
+      {/* Tab strip */}
+      <div style={{ display: 'flex', gap: 2, marginBottom: 10, background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: 3 }}>
+        {(['scores', 'graph', 'evidence'] as const).map(t => (
+          <button key={t} onClick={e => { e.stopPropagation(); setTab(t); }}
+            style={{ flex: 1, padding: '5px 0', background: tab === t ? 'rgba(124,58,237,0.25)' : 'transparent', border: tab === t ? '1px solid rgba(124,58,237,0.3)' : '1px solid transparent', color: tab === t ? '#a78bfa' : 'rgba(255,255,255,0.35)', borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: 'pointer', textTransform: 'capitalize' }}>
+            {t === 'graph' ? '⬡ Graph' : t === 'scores' ? '📊 Scores' : '📌 Evidence'}
           </button>
-        )}
+        ))}
       </div>
 
-      {showGraph && (
-        <div className="skill-graph-section" onClick={e => e.stopPropagation()}>
-          <SkillGraph3D
-            candidateName={candidate.candidate_name}
-            matchedRequired={candidate.matched_required}
-            matchedPreferred={candidate.matched_preferred}
-            missingRequired={candidate.missing_required}
-            height={280}
-          />
+      {/* Tab content */}
+      {tab === 'scores' && (
+        <div onClick={e => e.stopPropagation()}>
+          <AnimBar label="Keyword" value={c.keyword_score} color="#a78bfa" />
+          <AnimBar label="Semantic" value={c.semantic_score} color="#22d3ee" />
+          <AnimBar label="Skill Cover" value={c.skill_coverage_score} color="#34d399" />
+          <AnimBar label="BM25" value={c.bm25_score} color="#fb923c" />
+          {c.penalty_applied > 0 && <AnimBar label="Penalty" value={c.penalty_applied} color="#f87171" />}
+          <div style={{ marginTop: 12, maxHeight: 160, overflow: 'hidden' }}><RadarMini c={c} /></div>
         </div>
       )}
-
-      {expanded && (
-        <div className="explanation-body" onClick={e => e.stopPropagation()}>
-          {(explanation?.llm_summary || explanation?.template_summary) && (
-            <p className="explanation-summary">
-              {explanation.llm_summary || explanation.template_summary}
-            </p>
-          )}
-
-          {/* Clean evidence from top_evidence chunks */}
-          {cleanChunks.length > 0 && (
-            <div className="evidence-list">
-              <div className="evidence-header">📌 Strongest matching resume sections:</div>
-              {cleanChunks.slice(0, 3).map((chunk, i) => (
-                <div key={i} className="evidence-item">
-                  <div className="evidence-section-tag">{chunk.section_type.replace(/_\d+$/, '')} • {(chunk.similarity * 100).toFixed(0)}% match</div>
-                  <div className="evidence-text">"{chunk.text.slice(0, 280)}{chunk.text.length > 280 ? '...' : ''}"</div>
-                </div>
-              ))}
+      {tab === 'graph' && (
+        <div onClick={e => e.stopPropagation()}>
+          <SkillGraph matched={c.matched_required} preferred={c.matched_preferred} missing={c.missing_required} name={c.candidate_name} />
+        </div>
+      )}
+      {tab === 'evidence' && (
+        <div onClick={e => e.stopPropagation()}>
+          {cleanEvidence.length === 0 && <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.25)', textAlign: 'center', padding: '16px 0' }}>No body-text evidence found</div>}
+          {cleanEvidence.slice(0, 3).map((ch, i) => (
+            <div key={i} style={{ background: 'rgba(34,211,238,0.05)', borderLeft: '2px solid #22d3ee', borderRadius: '0 8px 8px 0', padding: '8px 10px', marginBottom: 8 }}>
+              <div style={{ fontSize: 9, fontWeight: 800, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
+                {ch.section_type.replace(/_\d+$/, '')} · {(ch.similarity * 100).toFixed(0)}% match
+              </div>
+              <div style={{ fontSize: 11, color: '#22d3ee', lineHeight: 1.6 }}>"{ch.text.slice(0, 260)}{ch.text.length > 260 ? '…' : ''}"</div>
             </div>
-          )}
-
-          {/* Additional evidence from explanation */}
-          {cleanEvidence.length > 0 && cleanChunks.length === 0 && (
-            <div className="evidence-list">
-              <div className="evidence-header">📌 Evidence from resume:</div>
-              {cleanEvidence.slice(0, 2).map((e, i) => (
-                <div key={i} className="evidence-item">
-                  <div className="evidence-text">"{e.slice(0, 280)}{e.length > 280 ? '...' : ''}"</div>
-                </div>
-              ))}
+          ))}
+          {exp?.template_summary && (
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 8, lineHeight: 1.6, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 8 }}>
+              {exp.template_summary}
             </div>
           )}
         </div>
       )}
-
-      <div className="card-radar" onClick={e => e.stopPropagation()}>
-        <RadarCard candidate={candidate} />
-      </div>
     </div>
   );
 }
 
-function BiasPanel({ flags }: { flags: BiasFlag[] }) {
-  if (flags.length === 0) return (
-    <div className="bias-clean glass-dark">
-      <span className="bias-clean-icon">✅</span>
-      <span>No bias detected in job description</span>
-    </div>
-  );
-  return (
-    <div className="bias-panel glass-dark">
-      <div className="bias-title">⚠️ JD Bias Flags ({flags.length})</div>
-      {flags.map((f, i) => (
-        <div key={i} className={`bias-flag severity-${f.severity.toLowerCase()}`}>
-          <div className="bias-flag-header">
-            <span className="bias-severity">{f.severity}</span>
-            <span className="bias-category">{f.category}</span>
-            <span className="bias-phrase">"{f.phrase}"</span>
-          </div>
-          <div className="bias-reason">{f.reason}</div>
-          {f.suggestion && <div className="bias-suggestion">💡 {f.suggestion}</div>}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function RecruiterChat({ candidates }: { candidates: Candidate[] }) {
-  const [messages, setMessages] = useState<{ role: 'user' | 'ai'; text: string }[]>([
-    { role: 'ai', text: 'Ask me anything about the rankings! e.g. "Why is candidate 1 ranked above candidate 3?" or "Who has the most React experience?"' },
-  ]);
-  const [input, setInput] = useState('');
+// ── Upload Panel ──────────────────────────────────────────────────────
+function UploadPanel({ onResult }: { onResult: (r: RankResult) => void }) {
+  const [jdFile, setJdFile] = useState<File | null>(null);
+  const [jdText, setJdText] = useState('');
+  const [resumeFiles, setResumeFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const [progress, setProgress] = useState('');
+  const [error, setError] = useState('');
+  const [fusionMode, setFusionMode] = useState('rrf');
+  const [penalty, setPenalty] = useState(8);
+  const [jdDrag, setJdDrag] = useState(false);
+  const [resDrag, setResDrag] = useState(false);
+  const jdRef = useRef<HTMLInputElement>(null);
+  const resRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  const onJdDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); setJdDrag(false);
+    const f = e.dataTransfer.files[0]; if (f) setJdFile(f);
+  }, []);
+  const onResDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); setResDrag(false);
+    const fs = Array.from(e.dataTransfer.files).filter(f => /\.(pdf|docx)$/i.test(f.name));
+    setResumeFiles(p => [...p, ...fs]);
+  }, []);
 
-  async function send() {
-    if (!input.trim() || loading) return;
-    const q = input;
-    setInput('');
-    setMessages(m => [...m, { role: 'user', text: q }]);
-    setLoading(true);
+  async function run() {
+    if ((!jdText.trim() && !jdFile) || resumeFiles.length === 0) { setError('Provide a JD and at least 1 resume.'); return; }
+    setError(''); setLoading(true); setProgress('Uploading…');
+    const form = new FormData();
+    if (jdFile) form.append('jd_file', jdFile);
+    else form.append('jd_text', jdText);
+    resumeFiles.forEach(f => form.append('resumes', f));
+    form.append('fusion_mode', fusionMode);
+    form.append('penalty_per_missing', String(penalty));
     try {
-      const res = await fetch(`${API}/api/v2/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: q }),
-      });
-      const data = await res.json();
-      setMessages(m => [...m, { role: 'ai', text: data.answer || data.detail || 'No answer returned.' }]);
-    } catch {
-      setMessages(m => [...m, { role: 'ai', text: 'Could not connect to chat API. Check backend is running.' }]);
-    }
-    setLoading(false);
+      setProgress('Running pipeline (may take ~60s for large batches)…');
+      const res = await fetch(`${API}/api/v2/rank`, { method: 'POST', body: form });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail || `HTTP ${res.status}`); }
+      const data: RankResult = await res.json();
+      onResult(data);
+    } catch (e: any) { setError(e.message); }
+    setLoading(false); setProgress('');
   }
 
   return (
-    <div className="chat-panel glass-dark">
-      <div className="chat-title">💬 Recruiter Chat</div>
-      <div className="chat-messages">
-        {messages.map((m, i) => (
-          <div key={i} className={`chat-msg ${m.role}`}>
-            <div className="chat-bubble">{m.text}</div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* JD drop zone */}
+      <div>
+        <div className="field-label">Job Description</div>
+        {!jdFile ? (
+          <>
+            <div className={`dz ${jdDrag ? 'dz--over' : ''}`}
+              onDragOver={e => { e.preventDefault(); setJdDrag(true); }}
+              onDragLeave={() => setJdDrag(false)}
+              onDrop={onJdDrop}
+              onClick={() => jdRef.current?.click()}>
+              <div className="dz-icon">📄</div>
+              <div className="dz-text">Drop JD file or <span style={{ color: '#a78bfa' }}>browse</span></div>
+              <div className="dz-sub">PDF · DOCX · TXT</div>
+              <input ref={jdRef} type="file" accept=".pdf,.docx,.txt" hidden onChange={e => e.target.files?.[0] && setJdFile(e.target.files[0])} />
+            </div>
+            <div className="field-label" style={{ marginTop: 8, marginBottom: 4 }}>Or paste JD text</div>
+            <textarea value={jdText} onChange={e => setJdText(e.target.value)}
+              style={{ width: '100%', minHeight: 100, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, color: '#e0e7ff', fontSize: 12, padding: '10px 12px', resize: 'vertical', fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }}
+              placeholder="Paste job description text here…" />
+          </>
+        ) : (
+          <div className="file-chip">
+            <span>📄 {jdFile.name}</span>
+            <button onClick={() => setJdFile(null)} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 16 }}>✕</button>
           </div>
-        ))}
-        {loading && <div className="chat-msg ai"><div className="chat-bubble typing">Thinking...</div></div>}
-        <div ref={bottomRef} />
+        )}
       </div>
-      <div className="chat-input-row">
-        <input
-          className="chat-input"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && send()}
-          placeholder="Ask about the rankings..."
-        />
-        <button className="chat-send" onClick={send} disabled={loading}>→</button>
+
+      {/* Resume drop zone */}
+      <div>
+        <div className="field-label">Resumes ({resumeFiles.length} files)</div>
+        <div className={`dz dz--sm ${resDrag ? 'dz--over' : ''}`}
+          onDragOver={e => { e.preventDefault(); setResDrag(true); }}
+          onDragLeave={() => setResDrag(false)}
+          onDrop={onResDrop}
+          onClick={() => resRef.current?.click()}>
+          <div className="dz-icon" style={{ fontSize: 24 }}>📁</div>
+          <div className="dz-text">Drop resumes or <span style={{ color: '#a78bfa' }}>browse</span></div>
+          <div className="dz-sub">PDF · DOCX (multiple)</div>
+          <input ref={resRef} type="file" accept=".pdf,.docx" multiple hidden onChange={e => { if (e.target.files) setResumeFiles(p => [...p, ...Array.from(e.target.files!)]); }} />
+        </div>
+        {resumeFiles.length > 0 && (
+          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 160, overflow: 'auto' }}>
+            {resumeFiles.map((f, i) => (
+              <div key={i} className="file-chip">
+                <span style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📄 {f.name}</span>
+                <button onClick={() => setResumeFiles(p => p.filter((_, j) => j !== i))} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 13, flexShrink: 0 }}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* Options */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div>
+          <div className="field-label">Fusion Mode</div>
+          <select value={fusionMode} onChange={e => setFusionMode(e.target.value)} className="sel">
+            <option value="rrf">RRF (Reciprocal Rank)</option>
+            <option value="weighted">Weighted Avg</option>
+          </select>
+        </div>
+        <div>
+          <div className="field-label">Missing Skill Penalty: {penalty}</div>
+          <input type="range" min={0} max={20} value={penalty} onChange={e => setPenalty(+e.target.value)} style={{ width: '100%', marginTop: 8, accentColor: '#a78bfa' }} />
+        </div>
+      </div>
+
+      {error && <div style={{ background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#f87171' }}>{error}</div>}
+
+      <button onClick={run} disabled={loading} className="run-btn">
+        {loading ? <><span className="spinner" />  {progress}</> : '⚡ Run Ranking Pipeline'}
+      </button>
+      {resumeFiles.length > 0 && <button onClick={() => setResumeFiles([])} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.35)', borderRadius: 8, padding: '8px', fontSize: 12, cursor: 'pointer' }}>Clear all resumes</button>}
+    </div>
+  );
+}
+
+// ── JD Analysis panel ─────────────────────────────────────────────────
+function JDPanel({ jd, biasFlags }: { jd: RankResult['jd_analysis']; biasFlags: BiasFlag[] }) {
+  const [showBias, setShowBias] = useState(false);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className="glass-panel" style={{ padding: 14 }}>
+        <div className="panel-label" style={{ marginBottom: 10 }}>JD Skills Extracted</div>
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 10, color: '#34d399', fontWeight: 700, marginBottom: 5 }}>REQUIRED ({jd.required_skills.length})</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            {jd.required_skills.map(s => <span key={s} style={{ fontSize: 10, padding: '2px 8px', background: 'rgba(52,211,153,0.1)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)', borderRadius: 4 }}>{s}</span>)}
+            {jd.required_skills.length === 0 && <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)' }}>None detected</span>}
+          </div>
+        </div>
+        {jd.preferred_skills.length > 0 && (
+          <div>
+            <div style={{ fontSize: 10, color: '#38bdf8', fontWeight: 700, marginBottom: 5 }}>PREFERRED ({jd.preferred_skills.length})</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {jd.preferred_skills.map(s => <span key={s} style={{ fontSize: 10, padding: '2px 8px', background: 'rgba(56,189,248,0.08)', color: '#38bdf8', border: '1px solid rgba(56,189,248,0.18)', borderRadius: 4 }}>{s}</span>)}
+            </div>
+          </div>
+        )}
+      </div>
+      {biasFlags.length > 0 && (
+        <div className="glass-panel" style={{ padding: 14, border: '1px solid rgba(251,146,60,0.2)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div className="panel-label" style={{ color: '#fb923c' }}>⚠️ Bias Flags ({biasFlags.length})</div>
+            <button onClick={() => setShowBias(!showBias)} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: 11 }}>{showBias ? '▲' : '▼'}</button>
+          </div>
+          {showBias && biasFlags.map((f, i) => (
+            <div key={i} style={{ background: 'rgba(251,146,60,0.06)', borderRadius: 8, padding: '8px 10px', marginBottom: 6, borderLeft: `2px solid ${f.severity === 'high' ? '#f87171' : '#fb923c'}` }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24' }}>"{f.phrase}"</div>
+              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)', marginTop: 2 }}>{f.reason}</div>
+              {f.suggestion && <div style={{ fontSize: 10, color: '#34d399', marginTop: 2 }}>💡 {f.suggestion}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Latency Panel ─────────────────────────────────────────────────────
+function LatencyPanel({ latency }: { latency: RankResult['latency'] }) {
+  const steps = [
+    { k: 'jd_parsing_ms', l: 'JD Parse' }, { k: 'resume_parsing_ms', l: 'Resume Parse' },
+    { k: 'keyword_scoring_ms', l: 'BM25+Keywords' }, { k: 'semantic_scoring_ms', l: 'Embeddings' },
+    { k: 'fusion_ranking_ms', l: 'RRF Fusion' }, { k: 'explanation_ms', l: 'Explanations' },
+  ];
+  const max = Math.max(...Object.values(latency.breakdown), 1);
+  return (
+    <div className="glass-panel" style={{ padding: 14 }}>
+      <div className="panel-label">⚡ Pipeline Latency</div>
+      {steps.filter(s => latency.breakdown[s.k] !== undefined).map(s => (
+        <div key={s.k} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+          <span style={{ width: 90, fontSize: 10, color: 'rgba(255,255,255,0.4)', textAlign: 'right', flexShrink: 0 }}>{s.l}</span>
+          <div style={{ flex: 1, height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2 }}>
+            <div style={{ height: '100%', width: `${(latency.breakdown[s.k] / max) * 100}%`, background: 'linear-gradient(90deg,#7c3aed,#2563eb)', borderRadius: 2 }} />
+          </div>
+          <span style={{ fontSize: 10, color: '#a78bfa', width: 45, textAlign: 'right' }}>{latency.breakdown[s.k]}ms</span>
+        </div>
+      ))}
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#22d3ee', marginTop: 8, textAlign: 'right' }}>Total: {latency.total_ms}ms</div>
     </div>
   );
 }
@@ -521,297 +680,124 @@ function RecruiterChat({ candidates }: { candidates: Candidate[] }) {
 // ── Main Page ─────────────────────────────────────────────────────────
 export default function RankPage() {
   const navigate = useNavigate();
-  const [jdText, setJdText] = useState('');
-  const [jdFile, setJdFile] = useState<File | null>(null);
-  const [resumeFiles, setResumeFiles] = useState<File[]>([]);
   const [result, setResult] = useState<RankResult | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showCompare, setShowCompare] = useState(false);
-  const [fusionMode, setFusionMode] = useState<'rrf' | 'weighted'>('rrf');
-  const [penalty, setPenalty] = useState(8);
-  const [jdDragging, setJdDragging] = useState(false);
-  const [resumeDragging, setResumeDragging] = useState(false);
-  const resumeInputRef = useRef<HTMLInputElement>(null);
-  const jdInputRef = useRef<HTMLInputElement>(null);
+  const [activeView, setActiveView] = useState<'list' | 'analytics'>('list');
+  const [search, setSearch] = useState('');
 
-  const handleResumesDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setResumeDragging(false);
-    const files = Array.from(e.dataTransfer.files).filter(f =>
-      f.name.endsWith('.pdf') || f.name.endsWith('.docx') || f.name.endsWith('.txt')
+  const expMap = useMemo(() => Object.fromEntries((result?.explanations ?? []).map(e => [e.candidate_id, e])), [result]);
+
+  const filtered = useMemo(() => {
+    if (!result) return [];
+    const q = search.toLowerCase();
+    return result.candidates.filter(c =>
+      !q || c.candidate_name.toLowerCase().includes(q) ||
+      c.matched_required.some(s => s.toLowerCase().includes(q)) ||
+      c.matched_preferred.some(s => s.toLowerCase().includes(q))
     );
-    setResumeFiles(prev => [...prev, ...files]);
-  }, []);
+  }, [result, search]);
 
-  const handleJdDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setJdDragging(false);
-    const f = e.dataTransfer.files[0];
-    if (f) setJdFile(f);
-  }, []);
-
-  async function runRanking() {
-    if ((!jdText.trim() && !jdFile) || resumeFiles.length === 0) {
-      setError('Please provide a JD and at least one resume.');
-      return;
-    }
-    setError('');
-    setLoading(true);
-    setResult(null);
-
-    const form = new FormData();
-    if (jdFile) form.append('jd_file', jdFile);
-    else form.append('jd_text', jdText);
-    resumeFiles.forEach(f => form.append('resumes', f));
-    form.append('fusion_mode', fusionMode);
-    form.append('penalty_per_missing', String(penalty));
-
-    try {
-      const res = await fetch(`${API}/api/v2/rank`, { method: 'POST', body: form });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || `HTTP ${res.status}`);
-      }
-      const data: RankResult = await res.json();
-      setResult(data);
-      setSelectedId(data.candidates[0]?.candidate_id ?? null);
-    } catch (e: any) {
-      setError(e.message || 'Pipeline failed.');
-    }
-    setLoading(false);
+  function handleResult(r: RankResult) {
+    setResult(r);
+    setSelectedId(r.candidates[0]?.candidate_id ?? null);
   }
 
-  const expMap = Object.fromEntries((result?.explanations ?? []).map(e => [e.candidate_id, e]));
-
   return (
-    <div className="rank-root">
-      {/* ── Navigation ─────────────────────────────────────────── */}
-      <nav className="rank-nav">
-        <button className="nav-back" onClick={() => navigate('/')}>← Home</button>
-        <div className="nav-title">
-          <span className="nav-icon">⬡</span>
+    <div className="rp-root">
+      <ParticleCanvas />
+
+      {/* ── Navbar ── */}
+      <nav className="rp-nav">
+        <button className="rp-nav-back" onClick={() => navigate('/')}>← Home</button>
+        <div className="rp-nav-brand">
+          <span style={{ fontSize: 22, lineHeight: 1 }}>⬡</span>
           <span>Smart Shortlisting Engine</span>
+          <span className="rp-nav-badge">v2</span>
         </div>
-        <div className="nav-pills">
-          <span className="nav-pill active">⚡ Rank</span>
-          <button className="nav-pill" onClick={() => navigate('/')}>🏠 Home</button>
-          <a
-            href="http://localhost:8000/docs"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="nav-pill"
-            style={{ textDecoration: 'none' }}
-          >📋 API Docs</a>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {result && (
+            <button className="rp-nav-pill" onClick={() => setShowCompare(true)}>⚖️ Compare</button>
+          )}
+          <a href={`${API}/docs`} target="_blank" rel="noopener noreferrer" className="rp-nav-pill">📋 API Docs</a>
+          <a href={`${API}/api/v2/results/export`} target="_blank" rel="noopener noreferrer" className="rp-nav-pill" style={{ color: '#34d399' }}>⬇️ Export CSV</a>
         </div>
       </nav>
 
-      <div className="rank-layout">
-        {/* ── Left: Upload Panel ──────────────────────────────── */}
-        <aside className="upload-panel glass-dark">
-          <h2 className="panel-heading">📄 Job Description</h2>
-
-          {!jdFile ? (
-            <div
-              className={`drop-zone ${jdDragging ? 'dragging' : ''}`}
-              onDragOver={e => { e.preventDefault(); setJdDragging(true); }}
-              onDragLeave={() => setJdDragging(false)}
-              onDrop={handleJdDrop}
-              onClick={() => jdInputRef.current?.click()}
-            >
-              <input ref={jdInputRef} type="file" accept=".pdf,.docx,.txt" hidden onChange={e => e.target.files?.[0] && setJdFile(e.target.files[0])} />
-              <div className="drop-icon">📋</div>
-              <div className="drop-text">Drop JD file or click</div>
-            </div>
-          ) : (
-            <div className="file-badge">
-              📄 {jdFile.name}
-              <button onClick={() => setJdFile(null)} className="file-remove">✕</button>
-            </div>
-          )}
-
-          {!jdFile && (
-            <textarea
-              className="jd-textarea"
-              placeholder="…or paste job description text here (min 50 chars)"
-              value={jdText}
-              onChange={e => setJdText(e.target.value)}
-              rows={8}
-            />
-          )}
-
-          <h2 className="panel-heading" style={{ marginTop: 20 }}>📁 Resumes ({resumeFiles.length})</h2>
-          <div
-            className={`drop-zone ${resumeDragging ? 'dragging' : ''}`}
-            onDragOver={e => { e.preventDefault(); setResumeDragging(true); }}
-            onDragLeave={() => setResumeDragging(false)}
-            onDrop={handleResumesDrop}
-            onClick={() => resumeInputRef.current?.click()}
-          >
-            <input ref={resumeInputRef} type="file" accept=".pdf,.docx,.txt" multiple hidden
-              onChange={e => setResumeFiles(prev => [...prev, ...Array.from(e.target.files ?? [])])} />
-            <div className="drop-icon">📂</div>
-            <div className="drop-text">Drop resumes (PDF/DOCX) or click</div>
-            <div className="drop-hint">Multiple files supported</div>
-          </div>
-
-          {resumeFiles.length > 0 && (
-            <div className="resume-list">
-              {resumeFiles.map((f, i) => (
-                <div key={i} className="resume-item">
-                  <span>📄 {f.name}</span>
-                  <button className="file-remove" onClick={() => setResumeFiles(prev => prev.filter((_, j) => j !== i))}>✕</button>
-                </div>
-              ))}
-              <button className="clear-all-btn" onClick={() => setResumeFiles([])}>Clear all</button>
-            </div>
-          )}
-
-          <div className="settings-section">
-            <h2 className="panel-heading" style={{ marginTop: 16 }}>⚙️ Settings</h2>
-            <label className="setting-label">Fusion Mode</label>
-            <div className="fusion-toggle">
-              <button className={`fusion-btn ${fusionMode === 'rrf' ? 'active' : ''}`} onClick={() => setFusionMode('rrf')}>
-                RRF ⚡
-              </button>
-              <button className={`fusion-btn ${fusionMode === 'weighted' ? 'active' : ''}`} onClick={() => setFusionMode('weighted')}>
-                Weighted
-              </button>
-            </div>
-            <label className="setting-label">Missing Skill Penalty: {penalty}</label>
-            <input type="range" min={0} max={20} value={penalty} onChange={e => setPenalty(Number(e.target.value))} className="penalty-slider" />
-          </div>
-
-          {error && <div className="error-box">{error}</div>}
-
-          <button
-            className="run-btn"
-            onClick={runRanking}
-            disabled={loading || (resumeFiles.length === 0) || (!jdText.trim() && !jdFile)}
-          >
-            {loading ? (
-              <><span className="spinner" />Ranking {resumeFiles.length} resumes...</>
-            ) : (
-              <>🚀 Run Ranking</>
-            )}
-          </button>
-
-          {result && (
-            <div className="meta-stats">
-              <div className="meta-stat">
-                <span className="meta-val">{result.total_resumes}</span>
-                <span className="meta-key">Resumes</span>
-              </div>
-              <div className="meta-stat">
-                <span className="meta-val">{result.latency.total_ms}ms</span>
-                <span className="meta-key">Total time</span>
-              </div>
-              <div className="meta-stat">
-                <span className="meta-val">{result.jd_analysis.required_skills.length}</span>
-                <span className="meta-key">Required skills</span>
-              </div>
-            </div>
-          )}
-
-          {result && (
-            <a
-              href={`${API}/api/v2/results/export`}
-              className="export-btn"
-              download="ranking_results.csv"
-            >
-              📥 Export CSV
-            </a>
-          )}
+      <div className="rp-body">
+        {/* ── Left sidebar: upload ── */}
+        <aside className="rp-sidebar glass-panel">
+          <div className="panel-label" style={{ marginBottom: 14, fontSize: 13 }}>📄 Configure & Upload</div>
+          <UploadPanel onResult={handleResult} />
         </aside>
 
-        {/* ── Right: Results ──────────────────────────────────── */}
-        <main className="results-area">
-          {!result && !loading && (
-            <div className="empty-state">
-              <div className="empty-icon">🎯</div>
-              <h2 className="empty-title">Ready to rank</h2>
-              <p className="empty-sub">Upload a JD + resumes on the left and click Run Ranking</p>
-              <div className="empty-features">
-                {['RRF Fusion', 'BM25 + Semantic', 'Evidence Snippets', 'Bias Detection', 'Recruiter Chat'].map(f => (
-                  <div key={f} className="empty-feature">✓ {f}</div>
-                ))}
-              </div>
+        {/* ── Main content ── */}
+        <main className="rp-main">
+          {!result ? (
+            <div className="rp-empty">
+              <div style={{ fontSize: 64, marginBottom: 16 }}>⬡</div>
+              <h2 style={{ fontSize: 24, fontWeight: 900, color: '#a78bfa', margin: '0 0 8px' }}>Ready to Rank</h2>
+              <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: 14 }}>Upload a JD + resumes on the left and click <strong style={{ color: '#a78bfa' }}>Run Ranking Pipeline</strong></p>
             </div>
-          )}
-
-          {loading && (
-            <div className="loading-state">
-              <div className="loading-ring" />
-              <div className="loading-text">Running 7-step AI pipeline...</div>
-              <div className="loading-steps">
-                {['Parsing JD', 'Parsing resumes', 'BM25 keywords', 'Semantic embeddings', 'RRF fusion', 'Generating explanations', 'Bias check'].map((s, i) => (
-                  <div key={s} className="loading-step" style={{ animationDelay: `${i * 0.3}s` }}>
-                    <span className="loading-step-dot" />
-                    {s}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {result && (
+          ) : (
             <>
-              {/* ── Top action bar */}
-              <div className="results-header">
-                <div className="results-title">
-                  Ranked {result.total_resumes} Candidates
-                  <span className="fusion-badge">{fusionMode === 'rrf' ? '⚡ RRF' : '⚖️ Weighted'}</span>
+              {/* Results header */}
+              <div className="rp-results-header">
+                <div>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: '#f0f4ff' }}>{result.total_resumes} Candidates Ranked</div>
+                  <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.4)', marginTop: 2 }}>
+                    {result.jd_analysis.required_skills.length} required skills · {result.latency.total_ms}ms total
+                  </div>
                 </div>
-                <div className="results-actions">
-                  <button className="action-btn" onClick={() => setShowCompare(true)}>⚖️ Compare</button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Filter candidates…" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#e0e7ff', padding: '8px 12px', borderRadius: 8, fontSize: 12, outline: 'none', width: 180 }} />
+                  <button className={`view-tab ${activeView === 'list' ? 'view-tab--active' : ''}`} onClick={() => setActiveView('list')}>📋 List</button>
+                  <button className={`view-tab ${activeView === 'analytics' ? 'view-tab--active' : ''}`} onClick={() => setActiveView('analytics')}>📊 Analytics</button>
                 </div>
               </div>
 
-              {/* ── JD Skills Summary */}
-              <div className="jd-skills-bar glass-dark">
-                <span className="jd-skills-label">Required:</span>
-                {result.jd_analysis.required_skills.slice(0, 8).map(s => (
-                  <span key={s} className="jd-skill req">{s}</span>
-                ))}
-                <span className="jd-skills-label" style={{ marginLeft: 8 }}>Preferred:</span>
-                {result.jd_analysis.preferred_skills.slice(0, 5).map(s => (
-                  <span key={s} className="jd-skill pref">{s}</span>
-                ))}
-              </div>
+              {activeView === 'analytics' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
+                  <ScoreHistogram candidates={result.candidates} />
+                  <JDPanel jd={result.jd_analysis} biasFlags={result.bias_flags} />
+                  <LatencyPanel latency={result.latency} />
+                  <div className="glass-panel" style={{ padding: 14 }}>
+                    <div className="panel-label">🏆 Top 3 Radar</div>
+                    {result.candidates.slice(0, 1).map(c => <RadarMini key={c.candidate_id} c={c} />)}
+                  </div>
+                </div>
+              )}
 
-              {/* ── Candidate grid */}
-              <div className="candidates-grid">
-                {result.candidates.map(c => (
-                  <CandidateCard
-                    key={c.candidate_id}
-                    candidate={c}
-                    explanation={expMap[c.candidate_id]}
-                    selected={selectedId === c.candidate_id}
-                    onSelect={() => setSelectedId(c.candidate_id)}
-                  />
-                ))}
-              </div>
-
-              {/* ── Analytics row */}
-              <div className="analytics-row">
-                <ScoreHistogram candidates={result.candidates} />
-                <LatencyBadge breakdown={result.latency.breakdown} />
-              </div>
-
-              {/* ── Bias panel */}
-              <BiasPanel flags={result.bias_flags} />
-
-              {/* ── Chat */}
-              <RecruiterChat candidates={result.candidates} />
+              {activeView === 'list' && (
+                <div className="rp-cards-grid">
+                  {filtered.map(c => (
+                    <CandidateCard
+                      key={c.candidate_id}
+                      c={c}
+                      exp={expMap[c.candidate_id]}
+                      active={selectedId === c.candidate_id}
+                      onClick={() => setSelectedId(c.candidate_id)}
+                      jdSkillCount={result.jd_analysis.required_skills.length}
+                    />
+                  ))}
+                  {filtered.length === 0 && <div style={{ color: 'rgba(255,255,255,0.25)', textAlign: 'center', gridColumn: '1/-1', padding: 40 }}>No candidates match your filter</div>}
+                </div>
+              )}
             </>
           )}
         </main>
+
+        {/* ── Right panel: JD + analytics (visible when results) ── */}
+        {result && (
+          <aside className="rp-right glass-panel">
+            <JDPanel jd={result.jd_analysis} biasFlags={result.bias_flags} />
+            <div style={{ marginTop: 16 }}><LatencyPanel latency={result.latency} /></div>
+            <div style={{ marginTop: 16 }}><ScoreHistogram candidates={result.candidates} /></div>
+          </aside>
+        )}
       </div>
 
-      {showCompare && result && (
-        <CompareModal candidates={result.candidates} onClose={() => setShowCompare(false)} />
-      )}
+      {showCompare && result && <CompareModal candidates={result.candidates} onClose={() => setShowCompare(false)} />}
     </div>
   );
 }

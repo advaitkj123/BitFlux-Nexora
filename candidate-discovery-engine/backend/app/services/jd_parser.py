@@ -238,12 +238,29 @@ def parse_jd(jd_text: str) -> ParsedJD:
     # Extract skills from each category
     required_text = " ".join(required_lines)
     preferred_text = " ".join(preferred_lines)
+    all_text = " ".join(all_lines)
 
     required_skills = extract_skills_from_text(required_text)
     preferred_skills = extract_skills_from_text(preferred_text)
+    all_skills_found = extract_skills_from_text(all_text)
 
-    # Remove preferred skills that are already in required
-    preferred_skills = [s for s in preferred_skills if s not in required_skills]
+    # ── FALLBACK: If no required skills were found (JD lacks explicit sections),
+    # treat ALL extracted skills as required. This fixes the "0/0 required" problem
+    # when recruiters upload plain JDs without "Requirements:" headers.
+    if not required_skills and all_skills_found:
+        required_skills = all_skills_found
+        preferred_skills = []
+        logger.info(
+            "jd_parse_fallback",
+            reason="no_required_section_detected",
+            skills_promoted=len(required_skills),
+        )
+    else:
+        # Remove preferred skills already in required
+        preferred_skills = [s for s in preferred_skills if s not in required_skills]
+        # Promote uncategorised skills found in full text to preferred
+        extra = [s for s in all_skills_found if s not in required_skills and s not in preferred_skills]
+        preferred_skills = sorted(set(preferred_skills + extra))
 
     all_skills = sorted(set(required_skills + preferred_skills))
 

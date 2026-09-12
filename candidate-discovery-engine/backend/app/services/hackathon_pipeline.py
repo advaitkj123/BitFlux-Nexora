@@ -289,16 +289,31 @@ async def run_pipeline(
     bm25_scorer = BM25Scorer(resume_texts)
     bm25_scores = bm25_scorer.score_all(jd_text)
 
+    # ── Fallback: if JD has no explicit required skills, treat all detected
+    # skills as required. This prevents the "0/0 required" display bug and
+    # ensures skill coverage scoring actually functions.
+    effective_required = parsed_jd.required_skills
+    effective_preferred = parsed_jd.preferred_skills
+    if not effective_required and parsed_jd.all_skills:
+        # Promote all skills to required — no explicit Required/Preferred split
+        effective_required = parsed_jd.all_skills
+        effective_preferred = []
+        logger.info(
+            "jd_no_explicit_required_using_all_skills",
+            n_skills=len(effective_required),
+        )
+
     # Compute keyword scores for each resume
     keyword_results: list[KeywordResult] = []
     for i, resume in enumerate(resumes):
         kw_result = compute_keyword_score(
-            jd_required=parsed_jd.required_skills,
-            jd_preferred=parsed_jd.preferred_skills,
+            jd_required=effective_required,
+            jd_preferred=effective_preferred,
             resume_skills=resume.extracted_skills.matched_skills,
             bm25_score=bm25_scores[i],
         )
         keyword_results.append(kw_result)
+
 
     latency_breakdown["keyword_scoring_ms"] = int((time.monotonic() - t0) * 1000)
 
