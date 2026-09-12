@@ -1,4 +1,4 @@
-#  AI Candidate Discovery Engine
+#  Smart Candidate Discovery Engine
 
 ### Enterprise-Grade Resume Matching at Scale
 
