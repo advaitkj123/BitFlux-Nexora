@@ -93,7 +93,7 @@ def _classify_line(line: str) -> str:
 
 def extract_skills_from_text(
     text: str,
-    fuzzy_threshold: int = 85,
+    fuzzy_threshold: int = 88,
 ) -> list[str]:
     """
     Extract canonical skill names from arbitrary text using the taxonomy.
@@ -102,39 +102,42 @@ def extract_skills_from_text(
     1. Direct substring matching (fast, handles most cases)
     2. Fuzzy matching via rapidfuzz (catches typos like 'Reactt', 'Mongodb')
 
+    Higher fuzzy threshold (88) prevents generic words ('R', 'Go', 'Data')
+    from false-matching unrelated terms.
+
     Returns deduplicated list of canonical skill names found.
     """
     alias_lookup = _get_alias_lookup()
     found_skills: set[str] = set()
     text_lower = text.lower()
 
-    # Strategy 1: Direct substring matching
+    # Strategy 1: Direct substring matching with strict word boundaries
     for alias_lower, canonical in alias_lookup.items():
-        if len(alias_lower) < 2:
+        if len(alias_lower) < 3:  # Raised from 2 to 3 to avoid short false matches
             continue
         # Word boundary check to avoid partial matches
-        # e.g., don't match "R" in "React" but do match "R" as standalone
-        pattern = r'(?<![a-zA-Z])' + re.escape(alias_lower) + r'(?![a-zA-Z])'
+        pattern = r'(?<![a-zA-Z0-9])' + re.escape(alias_lower) + r'(?![a-zA-Z0-9])'
         if re.search(pattern, text_lower):
             found_skills.add(canonical)
 
-    # Strategy 2: Fuzzy matching on individual words/phrases
-    words = re.findall(r'[A-Za-z][A-Za-z0-9.#+\-/]{1,30}', text)
-    # Also try bigrams for multi-word skills
+    # Strategy 2: Fuzzy matching on individual words/phrases (higher threshold)
+    words = re.findall(r'[A-Za-z][A-Za-z0-9.#+\-/]{2,30}', text)  # min 3 chars
+    # Also try bigrams and trigrams for multi-word skills
     bigrams = [f"{words[i]} {words[i+1]}" for i in range(len(words) - 1)]
-    candidates = words + bigrams
+    trigrams = [f"{words[i]} {words[i+1]} {words[i+2]}" for i in range(len(words) - 2)]
+    candidates = words + bigrams + trigrams
 
     all_aliases = list(alias_lookup.keys())
 
     for candidate in candidates:
         candidate_lower = candidate.lower()
-        if len(candidate_lower) < 2:
+        if len(candidate_lower) < 3:
             continue
         # Quick check: already found via direct match?
         if candidate_lower in alias_lookup:
             found_skills.add(alias_lookup[candidate_lower])
             continue
-        # Fuzzy match
+        # Fuzzy match with higher threshold to reduce false positives
         match = process.extractOne(
             candidate_lower,
             all_aliases,

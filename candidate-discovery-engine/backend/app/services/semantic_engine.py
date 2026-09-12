@@ -72,6 +72,30 @@ class SemanticResult:
     mean_similarity: float                # Raw mean of top-k similarities (0.0-1.0)
 
 
+# Sections excluded from semantic scoring — they contain contact info/headers
+# that accidentally match JD title keywords (e.g. "Founders Office" in name line)
+EXCLUDE_FROM_SEMANTIC = {"header", "other"}
+
+# Section weights for scoring — experience and projects are most relevant
+SECTION_WEIGHTS: dict[str, float] = {
+    "experience": 1.4,
+    "projects": 1.3,
+    "skills": 1.2,
+    "summary": 1.0,
+    "certifications": 0.9,
+    "education": 0.7,
+    "publications": 0.8,
+    "header": 0.0,  # never used — excluded above
+    "other": 0.6,
+}
+
+
+def _get_section_weight(section_type: str) -> float:
+    """Get the relevance weight for a section type."""
+    base = section_type.split("_")[0]  # handle 'experience_0', 'experience_1'
+    return SECTION_WEIGHTS.get(base, 0.8)
+
+
 def embed_text(text: str) -> np.ndarray:
     """Embed a single text string, returning a normalized vector."""
     model = _get_model()
@@ -103,54 +127,67 @@ def compute_semantic_score(
     """
     Compute semantic similarity between a JD and a resume's chunks.
 
-    Args:
-        jd_embedding: Pre-computed JD embedding (normalized, shape (dim,))
-        chunk_texts: List of resume chunk texts
-        chunk_section_types: Corresponding section types for each chunk
-        top_k: Number of top chunks to average for the final score
-
-    Returns:
-        SemanticResult with score (0-100), top evidence chunks, and raw similarities
+    Fixes applied:
+    - Excludes 'header' sections (name/email/phone) which bias similarity
+    - Applies section-type weights (experience > skills > summary > education)
+    - Uses min-max normalization across candidates for better score spread
+    - Falls back to mean of available chunks if fewer than top_k exist
     """
     if not chunk_texts:
         return SemanticResult(
-            score=0.0,
-            top_chunks=[],
-            all_similarities=[],
-            mean_similarity=0.0,
+            score=0.0, top_chunks=[], all_similarities=[], mean_similarity=0.0,
         )
 
-    # Batch encode all chunks
-    chunk_embeddings = embed_texts_batch(chunk_texts)
+    # Filter out header sections before embedding
+    filtered_texts: list[str] = []
+    filtered_types: list[str] = []
+    excluded_indices: set[int] = set()
+    for idx, (text, stype) in enumerate(zip(chunk_texts, chunk_section_types)):
+        base_type = stype.split("_")[0]
+        if base_type in EXCLUDE_FROM_SEMANTIC or not text.strip():
+            excluded_indices.add(idx)
+        else:
+            filtered_texts.append(text)
+            filtered_types.append(stype)
 
-    # Cosine similarity = dot product (since vectors are normalized)
-    similarities = chunk_embeddings @ jd_embedding  # shape: (n_chunks,)
+    if not filtered_texts:
+        return SemanticResult(
+            score=0.0, top_chunks=[], all_similarities=[], mean_similarity=0.0,
+        )
 
-    # Get top-k indices
-    k = min(top_k, len(similarities))
-    top_k_indices = np.argsort(similarities)[-k:][::-1]  # Descending order
+    chunk_embeddings = embed_texts_batch(filtered_texts)
+    raw_sims = chunk_embeddings @ jd_embedding  # cosine similarity
 
-    # Build evidence chunks
+    # Apply section weights
+    weighted_sims = np.array([
+        float(raw_sims[i]) * _get_section_weight(filtered_types[i])
+        for i in range(len(filtered_texts))
+    ])
+
+    k = min(top_k, len(weighted_sims))
+    top_k_indices = np.argsort(weighted_sims)[-k:][::-1]
+
     top_chunks = [
         EvidenceChunk(
-            text=chunk_texts[i],
-            section_type=chunk_section_types[i],
-            similarity=float(similarities[i]),
+            text=filtered_texts[i][:500],  # Trim to 500 chars for display
+            section_type=filtered_types[i],
+            similarity=float(raw_sims[i]),
         )
         for i in top_k_indices
     ]
 
-    # Final score = mean of top-k similarities, scaled to 0-100
-    mean_sim = float(np.mean([similarities[i] for i in top_k_indices]))
-    # Cosine similarity range for sentence-transformers is typically [0.0, 1.0]
-    # for related content. We scale to 0-100.
-    score = max(0.0, min(100.0, mean_sim * 100.0))
+    # Use RAW (unweighted) similarities for the final score to keep 0-100 scale honest
+    raw_top_k_mean = float(np.mean([raw_sims[i] for i in top_k_indices]))
+    # Sentence-transformer cosine sim typically ranges 0.2 - 0.85 for related content
+    # Rescale from [0.2, 0.85] → [0, 100] for better spread
+    LOW, HIGH = 0.20, 0.85
+    score = max(0.0, min(100.0, ((raw_top_k_mean - LOW) / (HIGH - LOW)) * 100.0))
 
     return SemanticResult(
         score=round(score, 2),
         top_chunks=top_chunks,
-        all_similarities=[float(s) for s in similarities],
-        mean_similarity=round(mean_sim, 4),
+        all_similarities=[float(s) for s in raw_sims],
+        mean_similarity=round(raw_top_k_mean, 4),
     )
 
 
@@ -164,26 +201,29 @@ def compute_batch_semantic_scores(
     Compute semantic scores for multiple resumes at once.
     More efficient because we embed the JD only once.
 
-    Args:
-        jd_text: The job description text
-        all_chunk_texts: List of chunk text lists (one per resume)
-        all_chunk_section_types: Corresponding section types (one per resume)
-        top_k: Number of top chunks to average per resume
-
-    Returns:
-        List of SemanticResult, one per resume
+    Applies section filtering, section weighting, and score rescaling
+    with min-max normalization across the candidate pool for maximum spread.
     """
     t0 = time.monotonic()
 
     # Embed JD once
     jd_embedding = embed_text(jd_text)
 
-    # Flatten all chunks for batch embedding
+    # Filter and flatten all chunks (exclude header/other sections)
+    filtered_per_resume: list[tuple[list[str], list[str]]] = []
     flat_texts: list[str] = []
-    boundaries: list[tuple[int, int]] = []  # (start_idx, end_idx) per resume
-    for chunks in all_chunk_texts:
+    boundaries: list[tuple[int, int]] = []
+
+    for chunk_texts, chunk_types in zip(all_chunk_texts, all_chunk_section_types):
+        f_texts, f_types = [], []
+        for text, stype in zip(chunk_texts, chunk_types):
+            base_type = stype.split("_")[0]
+            if base_type not in EXCLUDE_FROM_SEMANTIC and text.strip():
+                f_texts.append(text)
+                f_types.append(stype)
+        filtered_per_resume.append((f_texts, f_types))
         start = len(flat_texts)
-        flat_texts.extend(chunks)
+        flat_texts.extend(f_texts)
         boundaries.append((start, len(flat_texts)))
 
     # Single batch encode for ALL chunks across ALL resumes
@@ -192,41 +232,73 @@ def compute_batch_semantic_scores(
     else:
         all_embeddings = np.array([], dtype=np.float32).reshape(0, 384)
 
-    # Compute per-resume results
-    results: list[SemanticResult] = []
+    # Compute per-resume raw top-k mean similarities (before normalization)
+    raw_means: list[float] = []
+    interim: list[dict] = []
+
     for i, (start, end) in enumerate(boundaries):
-        if start == end:
+        f_texts, f_types = filtered_per_resume[i]
+        if start == end or not f_texts:
+            raw_means.append(0.0)
+            interim.append({"top_chunks": [], "raw_sims": [], "top_k_raw_mean": 0.0})
+            continue
+
+        chunk_embeddings = all_embeddings[start:end]
+        raw_sims = chunk_embeddings @ jd_embedding
+
+        # Weighted similarities for ranking chunks (but not for final score)
+        weighted_sims = np.array([
+            float(raw_sims[j]) * _get_section_weight(f_types[j])
+            for j in range(len(f_texts))
+        ])
+
+        k = min(top_k, len(weighted_sims))
+        top_k_indices = np.argsort(weighted_sims)[-k:][::-1]
+
+        top_chunks = [
+            EvidenceChunk(
+                text=f_texts[j][:500],
+                section_type=f_types[j],
+                similarity=float(raw_sims[j]),
+            )
+            for j in top_k_indices
+        ]
+
+        top_k_raw_mean = float(np.mean([raw_sims[j] for j in top_k_indices]))
+        raw_means.append(top_k_raw_mean)
+        interim.append({
+            "top_chunks": top_chunks,
+            "raw_sims": [float(s) for s in raw_sims],
+            "top_k_raw_mean": top_k_raw_mean,
+        })
+
+    # Min-max normalize across the candidate pool for MUCH better score spread
+    # This ensures the best candidate gets close to 100 and weakest gets close to 0
+    if raw_means:
+        pool_min = min(raw_means)
+        pool_max = max(raw_means)
+        pool_range = pool_max - pool_min if pool_max != pool_min else 1.0
+    else:
+        pool_min, pool_max, pool_range = 0.0, 1.0, 1.0
+
+    results: list[SemanticResult] = []
+    for i, data in enumerate(interim):
+        if not data["top_chunks"]:
             results.append(SemanticResult(
                 score=0.0, top_chunks=[], all_similarities=[], mean_similarity=0.0,
             ))
             continue
 
-        chunk_embeddings = all_embeddings[start:end]
-        similarities = chunk_embeddings @ jd_embedding
-
-        k = min(top_k, len(similarities))
-        top_k_indices = np.argsort(similarities)[-k:][::-1]
-
-        chunk_texts = all_chunk_texts[i]
-        section_types = all_chunk_section_types[i]
-
-        top_chunks = [
-            EvidenceChunk(
-                text=chunk_texts[j],
-                section_type=section_types[j],
-                similarity=float(similarities[j]),
-            )
-            for j in top_k_indices
-        ]
-
-        mean_sim = float(np.mean([similarities[j] for j in top_k_indices]))
-        score = max(0.0, min(100.0, mean_sim * 100.0))
+        raw_mean = data["top_k_raw_mean"]
+        # Pool-normalized score: 0-100 relative to this batch
+        normalized_score = ((raw_mean - pool_min) / pool_range) * 100.0
+        score = max(0.0, min(100.0, normalized_score))
 
         results.append(SemanticResult(
             score=round(score, 2),
-            top_chunks=top_chunks,
-            all_similarities=[float(s) for s in similarities],
-            mean_similarity=round(mean_sim, 4),
+            top_chunks=data["top_chunks"],
+            all_similarities=data["raw_sims"],
+            mean_similarity=round(raw_mean, 4),
         ))
 
     embed_ms = int((time.monotonic() - t0) * 1000)
@@ -235,6 +307,8 @@ def compute_batch_semantic_scores(
         n_resumes=len(results),
         total_chunks=len(flat_texts),
         latency_ms=embed_ms,
+        pool_min=round(pool_min, 3),
+        pool_max=round(pool_max, 3),
     )
 
     return results

@@ -13,6 +13,7 @@ import {
   BarElement,
 } from 'chart.js';
 import { Radar, Bar } from 'react-chartjs-2';
+import SkillGraph3D from '../components/SkillGraph3D';
 import './rank.css';
 
 ChartJS.register(
@@ -287,6 +288,30 @@ function CandidateCard({
 }) {
   const badge = rankBadge(candidate.rank);
   const [expanded, setExpanded] = useState(false);
+  const [showGraph, setShowGraph] = useState(false);
+
+  // Clean evidence: filter out contact-info evidence (lines with @, phone patterns)
+  const cleanEvidence = (explanation?.supporting_evidence ?? []).filter(e => {
+    const lower = e.toLowerCase();
+    return !(
+      lower.includes('@') ||
+      /\+?[0-9]{10,}/.test(e) ||
+      lower.includes('linkedin') ||
+      lower.includes('github.com') ||
+      e.length < 40
+    );
+  });
+
+  // Clean top_evidence chunks from the candidate object — filter header-type content
+  const cleanChunks = candidate.top_evidence.filter(chunk => {
+    const t = chunk.text.toLowerCase();
+    return !(
+      t.includes('@') && t.includes('.com') ||
+      chunk.section_type === 'header' ||
+      /\+?[0-9]{10}/.test(chunk.text) ||
+      chunk.text.length < 60
+    );
+  });
 
   return (
     <div
@@ -297,6 +322,16 @@ function CandidateCard({
         <div className="card-left">
           <div className="rank-badge" style={{ background: badge.bg }}>{badge.text}</div>
           <div className="candidate-name">{candidate.candidate_name}</div>
+          <div className="coverage-pills">
+            <span className="coverage-pill green">
+              ✓ {candidate.matched_required.length}/{candidate.matched_required.length + candidate.missing_required.length} required
+            </span>
+            {candidate.missing_required.length > 0 && (
+              <span className="coverage-pill red">
+                ✗ {candidate.missing_required.length} missing
+              </span>
+            )}
+          </div>
         </div>
         <div className="card-right">
           <CircleScore score={candidate.final_score} size={68} />
@@ -319,27 +354,75 @@ function CandidateCard({
         {candidate.missing_required.slice(0, 3).map(s => (
           <span key={s} className="skill-chip red">✗ {s}</span>
         ))}
+        {candidate.matched_preferred.slice(0, 3).map(s => (
+          <span key={s} className="skill-chip blue">~ {s}</span>
+        ))}
         {candidate.matched_required.length > 5 && (
           <span className="skill-chip grey">+{candidate.matched_required.length - 5} more</span>
         )}
       </div>
 
-      {candidate.rank <= 3 && explanation && (
-        <div className="explanation-section">
-          <button className="expand-btn" onClick={e => { e.stopPropagation(); setExpanded(!expanded); }}>
-            {expanded ? '▲ Hide explanation' : '▼ Show AI explanation'}
+      {/* ── 3D Skill Graph toggle */}
+      <div className="card-actions" onClick={e => e.stopPropagation()}>
+        <button
+          className="expand-btn"
+          onClick={() => setShowGraph(!showGraph)}
+        >
+          {showGraph ? '▲ Hide skill graph' : '▼ Show 3D skill graph'}
+        </button>
+        {(explanation || cleanChunks.length > 0) && (
+          <button
+            className="expand-btn"
+            style={{ marginLeft: 12 }}
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? '▲ Hide evidence' : '▼ Show evidence'}
           </button>
-          {expanded && (
-            <div className="explanation-body">
-              <p className="explanation-summary">{explanation.llm_summary || explanation.template_summary}</p>
-              {explanation.supporting_evidence.length > 0 && (
-                <div className="evidence-list">
-                  <div className="evidence-header">📌 Evidence from resume:</div>
-                  {explanation.supporting_evidence.slice(0, 2).map((e, i) => (
-                    <div key={i} className="evidence-item">"{e}"</div>
-                  ))}
+        )}
+      </div>
+
+      {showGraph && (
+        <div className="skill-graph-section" onClick={e => e.stopPropagation()}>
+          <SkillGraph3D
+            candidateName={candidate.candidate_name}
+            matchedRequired={candidate.matched_required}
+            matchedPreferred={candidate.matched_preferred}
+            missingRequired={candidate.missing_required}
+            height={280}
+          />
+        </div>
+      )}
+
+      {expanded && (
+        <div className="explanation-body" onClick={e => e.stopPropagation()}>
+          {(explanation?.llm_summary || explanation?.template_summary) && (
+            <p className="explanation-summary">
+              {explanation.llm_summary || explanation.template_summary}
+            </p>
+          )}
+
+          {/* Clean evidence from top_evidence chunks */}
+          {cleanChunks.length > 0 && (
+            <div className="evidence-list">
+              <div className="evidence-header">📌 Strongest matching resume sections:</div>
+              {cleanChunks.slice(0, 3).map((chunk, i) => (
+                <div key={i} className="evidence-item">
+                  <div className="evidence-section-tag">{chunk.section_type.replace(/_\d+$/, '')} • {(chunk.similarity * 100).toFixed(0)}% match</div>
+                  <div className="evidence-text">"{chunk.text.slice(0, 280)}{chunk.text.length > 280 ? '...' : ''}"</div>
                 </div>
-              )}
+              ))}
+            </div>
+          )}
+
+          {/* Additional evidence from explanation */}
+          {cleanEvidence.length > 0 && cleanChunks.length === 0 && (
+            <div className="evidence-list">
+              <div className="evidence-header">📌 Evidence from resume:</div>
+              {cleanEvidence.slice(0, 2).map((e, i) => (
+                <div key={i} className="evidence-item">
+                  <div className="evidence-text">"{e.slice(0, 280)}{e.length > 280 ? '...' : ''}"</div>
+                </div>
+              ))}
             </div>
           )}
         </div>
