@@ -55,12 +55,41 @@ export default function CandidateDetailPage() {
           justifyContent: 'center',
           flexDirection: 'column',
           gap: 16,
+          padding: 32,
         }}
       >
-        <h2 style={{ fontSize: 20, fontWeight: 700 }}>Candidate not found</h2>
-        <button className="btn-primary" onClick={() => navigate('/')}>
-          Back to Search
-        </button>
+        <div style={{ fontSize: 48 }}>⬡</div>
+        <h2 style={{ color: '#a78bfa', fontSize: 22, fontWeight: 800, margin: 0 }}>
+          Candidate Profile Unavailable
+        </h2>
+        <p style={{ color: 'rgba(240,244,255,0.5)', fontSize: 14, textAlign: 'center', maxWidth: 400 }}>
+          Individual candidate profiles require the v1 database which is offline in hackathon mode.
+          Use the <strong style={{ color: '#22d3ee' }}>Rank Candidates</strong> page to run a full pipeline and explore candidate scores interactively.
+        </p>
+        <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+          <button
+            onClick={() => navigate('/rank')}
+            style={{
+              background: 'linear-gradient(135deg,#7c3aed,#2563eb)',
+              border: 'none', color: 'white', padding: '10px 24px',
+              borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              fontFamily: 'inherit',
+            }}
+          >
+            ⚡ Go to Rank Candidates
+          </button>
+          <button
+            onClick={() => navigate('/')}
+            style={{
+              background: 'rgba(255,255,255,0.05)',
+              border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(240,244,255,0.7)',
+              padding: '10px 24px', borderRadius: 8, fontSize: 14, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }}
+          >
+            🏠 Home
+          </button>
+        </div>
       </div>
     );
   }

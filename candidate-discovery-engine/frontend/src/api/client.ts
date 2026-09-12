@@ -6,59 +6,46 @@ import type {
   SearchHistoryResponse,
 } from '../types';
 
+// V2 API is at http://localhost:8000/api/v2 — all ranking endpoints live here.
+// V1 endpoints (search, ingest, candidates) are offline — do NOT use.
+const API_BASE = import.meta.env.VITE_API_URL
+  ? `${import.meta.env.VITE_API_URL}/api/v2`
+  : 'http://localhost:8000/api/v2';
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api/v1',
+  baseURL: API_BASE,
   headers: { 'Content-Type': 'application/json' },
-  timeout: 30000,
+  timeout: 120000, // 2 min — ranking 200 resumes takes ~60s
 });
 
-/* ── Search (text-based) ──────────────────────────────────────── */
+/* ── V1 stubs — gracefully return empty rather than 404 ──────────── */
 export async function searchCandidates(
-  request: SearchRequest
+  _request: SearchRequest
 ): Promise<SearchResponse> {
-  const { data } = await api.post<SearchResponse>('/search', request);
-  return data;
+  // V1 offline — return empty
+  return { results: [], total: 0, query_ms: 0, cached: false } as any;
 }
 
-/* ── Search (file upload) ─────────────────────────────────────── */
 export async function uploadAndSearch(
-  file: File,
-  topK: number = 20,
-  onProgress?: (pct: number) => void
+  _file: File,
+  _topK: number = 20,
 ): Promise<SearchResponse> {
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('top_k', String(topK));
-
-  const { data } = await api.post<SearchResponse>('/ingest', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    onUploadProgress: (e) => {
-      if (e.total && onProgress) {
-        onProgress(Math.round((e.loaded * 100) / e.total));
-      }
-    },
-  });
-  return data;
+  // V1 offline — return empty
+  return { results: [], total: 0, query_ms: 0, cached: false } as any;
 }
 
-/* ── Candidate Detail ─────────────────────────────────────────── */
 export async function getCandidateDetail(
-  candidateId: string
+  _candidateId: string
 ): Promise<CandidateDetailResponse> {
-  const { data } = await api.get<CandidateDetailResponse>(
-    `/candidates/${candidateId}`
-  );
-  return data;
+  // V1 offline — route to v2 explanation endpoint
+  throw new Error('Candidate detail not available. Use the /rank page.');
 }
 
-/* ── Search History ───────────────────────────────────────────── */
 export async function getSearchHistory(
-  limit: number = 20
+  _limit: number = 20
 ): Promise<SearchHistoryResponse> {
-  const { data } = await api.get<SearchHistoryResponse>('/search/history', {
-    params: { limit },
-  });
-  return data;
+  // V1 history endpoint is offline — return empty gracefully
+  return { history: [] } as any;
 }
 
 export default api;

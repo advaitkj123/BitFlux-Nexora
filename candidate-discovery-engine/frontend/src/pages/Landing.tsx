@@ -193,6 +193,7 @@ export default function Landing() {
             <a href="#features">Features</a>
             <a href="#how-it-works">How It Works</a>
             <a href="#stats">Results</a>
+            <a href="/rank" onClick={e => { e.preventDefault(); navigate('/rank'); }}>⚡ Rank Candidates</a>
           </div>
           <button className="nav-cta" onClick={() => navigate('/rank')}>
             Try Demo →

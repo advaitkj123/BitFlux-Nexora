@@ -589,14 +589,21 @@ export default function RankPage() {
     <div className="rank-root">
       {/* ── Navigation ─────────────────────────────────────────── */}
       <nav className="rank-nav">
-        <button className="nav-back" onClick={() => navigate('/')}>← InternLoom</button>
+        <button className="nav-back" onClick={() => navigate('/')}>← Home</button>
         <div className="nav-title">
           <span className="nav-icon">⬡</span>
           <span>Smart Shortlisting Engine</span>
         </div>
         <div className="nav-pills">
-          <span className="nav-pill active">Rank</span>
-          <button className="nav-pill" onClick={() => navigate('/')}>Home</button>
+          <span className="nav-pill active">⚡ Rank</span>
+          <button className="nav-pill" onClick={() => navigate('/')}>🏠 Home</button>
+          <a
+            href="http://localhost:8000/docs"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-pill"
+            style={{ textDecoration: 'none' }}
+          >📋 API Docs</a>
         </div>
       </nav>
 
